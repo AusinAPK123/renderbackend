@@ -51,6 +51,45 @@ app.post("/use-token", async (req, res) => {
   }
 });
 
+app.post("/add-xp", async (req, res) => {
+  try {
+    const { uid, xpToAdd = 5 } = req.body; // mặc định mỗi lần +5 XP
+    if (!uid) return res.status(400).json({ error: "Missing uid" });
+
+    const xpRef = db.ref(`users/${uid}/xp`);
+    const lvRef = db.ref(`users/${uid}/level`);
+
+    const [xpSnap, lvSnap] = await Promise.all([xpRef.get(), lvRef.get()]);
+    let currentXp = xpSnap.val() || 0;
+    let level = lvSnap.val() || 0;
+
+    const levelXP = [100,150,200,250,300,350,400,450,500,550,600,650,700,750,800]; // XP cần lên mỗi level
+
+    if (level < 15) {
+      currentXp += xpToAdd;
+
+      // kiểm tra đủ XP để lên cấp
+      while (level < 15 && currentXp >= levelXP[level]) {
+        currentXp -= levelXP[level];
+        level++;
+      }
+
+      // nếu level=15, giới hạn XP max
+      if (level >= 15) {
+        level = 15;
+        currentXp = Math.min(currentXp, 6749); // max XP
+      }
+
+      await Promise.all([xpRef.set(currentXp), lvRef.set(level)]);
+    }
+
+    res.json({ ok: true, xp: currentXp, level });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 // Cleanup token quá hạn
 app.post("/cleanup-tokens", async (req, res) => {
   try {
