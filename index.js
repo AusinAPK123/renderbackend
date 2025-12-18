@@ -38,7 +38,7 @@ app.post("/use-token", async (req, res) => {
     const COIN_ADD = 30;
 
     // Cộng coin cho user
-    const coinRef = db.ref(`users/${uid}/coin`);
+    const coinRef = db.ref(`users/${uid}/coins`);
     await coinRef.transaction(current => (current || 0) + COIN_ADD);
 
     // sau khi cộng coin
