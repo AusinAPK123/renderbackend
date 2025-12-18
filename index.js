@@ -154,6 +154,39 @@ app.post("/get-token", async (req, res) => {
   }
 });
 
+// --- Check rulesAccepted ---
+app.get("/check-rules", async (req, res) => {
+  try {
+    const { uid } = req.query;
+    if (!uid) return res.status(400).json({ ok: false, error: "Missing uid" });
+
+    const userRef = db.ref(`users/${uid}`);
+    const snap = await userRef.get();
+    const userData = snap.val() || {};
+
+    res.json({ ok: true, rulesAccepted: !!userData.rulesAccepted });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+// --- Accept rules ---
+app.post("/accept-rules", async (req, res) => {
+  try {
+    const { uid } = req.body;
+    if (!uid) return res.status(400).json({ ok: false, error: "Missing uid" });
+
+    const userRef = db.ref(`users/${uid}`);
+    await userRef.update({ rulesAccepted: true });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
 // Cleanup token quá hạn
 app.post("/cleanup-tokens", async (req, res) => {
   try {
