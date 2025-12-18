@@ -39,6 +39,18 @@ app.post("/use-token", async (req, res) => {
     const coinRef = db.ref(`users/${uid}/coin`);
     await coinRef.transaction(current => (current || 0) + COIN_ADD);
 
+    // sau khi cộng coin
+const linkRef = db.ref(`users/${uid}/links/${tokenData.link}`);
+const today = new Date().toISOString().slice(0,10);
+
+await linkRef.transaction(current => {
+  if (!current || current.date !== today) {
+    return { date: today, count: 1 };
+  } else {
+    return { ...current, count: (current.count||0) + 1 };
+  }
+});
+
     // Đánh dấu token đã dùng và set deleteAt
     await tokenRef.update({
       used: true,
