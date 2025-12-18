@@ -187,6 +187,43 @@ app.post("/accept-rules", async (req, res) => {
   }
 });
 
+// --- Login endpoint (giới hạn 1 phút 1 lần) ---
+app.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ ok: false, error: "Missing email or password" });
+
+    // Lấy user từ DB
+    const snapshot = await db.ref("users").orderByChild("email").equalTo(email).get();
+    if (!snapshot.exists())
+      return res.status(404).json({ ok: false, error: "User not found" });
+
+    const userData = Object.values(snapshot.val())[0];
+
+    // Kiểm tra password
+    if (userData.password !== password)
+      return res.status(401).json({ ok: false, error: "Wrong password" });
+
+    const now = Date.now();
+    const lastLogin = userData.lastLoginAt || 0;
+
+    // Giới hạn 1 phút
+    if (now - lastLogin < 60 * 1000) {
+      const remaining = Math.ceil((60 * 1000 - (now - lastLogin)) / 1000);
+      return res.status(429).json({ ok: false, error: `Chỉ được login 1 lần mỗi phút. Vui lòng đợi ${remaining}s` });
+    }
+
+    // Cập nhật lastLoginAt
+    await db.ref("users/" + userData.uid).update({ lastLoginAt: now });
+
+    res.json({ ok: true, uid: userData.uid, rulesAccepted: !!userData.rulesAccepted });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
 // Cleanup token quá hạn
 app.post("/cleanup-tokens", async (req, res) => {
   try {
