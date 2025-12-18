@@ -224,6 +224,25 @@ app.post("/login", async (req, res) => {
   }
 });
 
+// Lấy tất cả notifications, sắp xếp theo createAt giảm dần
+app.get("/notifications", async (req, res) => {
+  try {
+    const notifRef = db.ref("notifications");
+    const snap = await notifRef.get();
+    const data = snap.val() || {};
+
+    // Chuyển object thành array và sắp xếp theo createAt giảm dần
+    const notifications = Object.entries(data)
+      .map(([id, val]) => ({ id, ...val }))
+      .sort((a, b) => b.createAt - a.createAt);
+
+    res.json({ ok: true, notifications });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
 // Cleanup token quá hạn
 app.post("/cleanup-tokens", async (req, res) => {
   try {
