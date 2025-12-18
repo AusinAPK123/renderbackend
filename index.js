@@ -16,3 +16,10 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
+
+
+
+app.post("/test", async (req, res) => {
+  await db.ref("test/value").set(Date.now());
+  res.send("OK");
+});
