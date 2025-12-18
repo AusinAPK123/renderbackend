@@ -1,5 +1,7 @@
 const express = require("express");
 const admin = require("firebase-admin");
+const cors = require("cors");
+app.use(cors());
 const { v4: uuidv4 } = require("uuid");
 
 const app = express();
