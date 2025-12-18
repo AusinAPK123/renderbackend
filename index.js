@@ -1,11 +1,11 @@
 const express = require("express");
 const admin = require("firebase-admin");
 const cors = require("cors");
-app.use(cors());
 const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 
 admin.initializeApp({
   credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)),
