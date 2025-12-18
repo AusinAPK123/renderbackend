@@ -17,13 +17,26 @@ app.get("/", (req, res) => {
   res.send("Server is running");
 });
 
-app.get("/test", async (req, res) => {
+app.post("/add-coin", async (req, res) => {
   try {
-    await db.ref("test/value").set(Date.now());
-    res.send("OK");
+    const { uid } = req.body;
+
+    if (!uid) {
+      return res.status(400).json({ error: "Missing uid" });
+    }
+
+    const COIN_ADD = 30;
+
+    const coinRef = db.ref(`users/${uid}/coin`);
+
+    await coinRef.transaction((current) => {
+      return (current || 0) + COIN_ADD;
+    });
+
+    res.json({ ok: true, added: COIN_ADD });
   } catch (err) {
     console.error(err);
-    res.status(500).send("ERROR");
+    res.status(500).json({ error: "Server error" });
   }
 });
 
