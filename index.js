@@ -128,7 +128,7 @@ app.post("/get-token", async (req, res) => {
     // tạo token mới
     const token = uuidv4();
     const startAt = now;
-    const expireAt = now + 60 * 60 * 1000; // token có hiệu lực 60 giây
+    const expireAt = now; // token có hiệu lực 60 giây
     const deleteAt = now + 6 * 60 * 60 * 1000; // xóa sau 6h
 
     await db.ref(`sessions/${token}`).set({
