@@ -1,5 +1,6 @@
 const express = require("express");
 const admin = require("firebase-admin");
+const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 app.use(express.json());
@@ -84,6 +85,55 @@ app.post("/add-xp", async (req, res) => {
     }
 
     res.json({ ok: true, xp: currentXp, level });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// --- tạo token mới cho web1 ---
+app.post("/get-token", async (req, res) => {
+  try {
+    const { uid, linkId } = req.body;
+    if (!uid || !linkId) return res.status(400).json({ error: "Missing uid or linkId" });
+
+    const linkRef = db.ref(`users/${uid}/links/${linkId}`);
+    const now = Date.now();
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+    // Lấy dữ liệu link hôm nay
+    const snap = await linkRef.get();
+    const linkData = snap.val() || {};
+    let countToday = (linkData.date === today) ? (linkData.count || 0) : 0;
+
+    if (countToday >= 2) {
+      // vượt quá hạn mức hôm nay -> trả countToday nhưng không tạo token
+      return res.json({ ok: false, countToday });
+    }
+
+    // tạo token mới
+    const token = uuidv4();
+    const startAt = now;
+    const expireAt = now + 60 * 1000; // token có hiệu lực 60 giây
+    const deleteAt = now + 6 * 60 * 60 * 1000; // xóa sau 6h
+
+    await db.ref(`sessions/${token}`).set({
+      token,
+      uid,
+      link: linkId,
+      used: false,
+      startAt,
+      expireAt,
+      deleteAt
+    });
+
+    // trả về số lần vượt hôm nay + token mới
+    res.json({
+      ok: true,
+      token,
+      countToday
+    });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Server error" });
