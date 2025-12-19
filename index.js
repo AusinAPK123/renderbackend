@@ -67,6 +67,54 @@ await linkRef.transaction(current => {
   }
 });
 
+// --- Trừ coin blockL ---
+app.post("/spend-coin", async (req, res) => {
+  const { uid, type } = req.body;
+  if (!uid || !type) return res.status(400).json({ ok: false, error: "Missing uid/type" });
+
+  const coinCostMap = {
+    revive: 100,
+    removeRow: 30,
+    removeCol: 30,
+    removeAll: 90
+  };
+  const cost = coinCostMap[type];
+  if (!cost) return res.status(400).json({ ok: false, error: "Unknown type" });
+
+  try {
+    const coinRef = db.ref(`users/${uid}/coins`);
+    const result = await coinRef.transaction(current => {
+      if ((current ?? 0) < cost) throw new Error("Not enough coins");
+      return (current ?? 0) - cost;
+    });
+    res.json({ ok: true, coinsLeft: result.snapshot.val() });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// --- Update score ---
+app.post("/submit-score", async (req, res) => {
+  const { uid, score } = req.body;
+  if (!uid || score == null) return res.status(400).json({ ok: false, error: "Missing uid/score" });
+
+  try {
+    const userRef = db.ref(`leaderboard/${uid}`);
+    const snap = await userRef.get();
+    if (!snap.exists()) {
+      return res.json({ ok: false, error: "Chưa tham gia → không thể tải điểm" });
+    }
+
+    const bestscore = snap.val().bestscore ?? 0;
+    if (score > bestscore) {
+      await userRef.update({ bestscore: score });
+      return res.json({ ok: true, newBest: true });
+    }
+    res.json({ ok: true, newBest: false });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+
 app.post("/add-xp", async (req, res) => {
   try {
     const { uid, xpToAdd = 5 } = req.body; // mặc định mỗi lần +5 XP
