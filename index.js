@@ -99,7 +99,7 @@ app.post("/submit-score", async (req, res) => {
   if (!uid || score == null) return res.status(400).json({ ok: false, error: "Missing uid/score" });
 
   try {
-    const userRef = db.ref(`leaderboard/${uid}`);
+    const userRef = db.ref(`leaderboard/BlockL/${uid}`);
     const snap = await userRef.get();
     if (!snap.exists()) {
       return res.json({ ok: false, error: "Chưa tham gia → không thể tải điểm" });
