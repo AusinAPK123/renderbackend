@@ -95,27 +95,31 @@ app.post("/spend-coin", async (req, res) => {
 
 // --- Update score ---
 app.post("/submit-score", async (req, res) => {
-  const { uid, score } = req.body;
-  if (!uid || score == null) return res.status(400).json({ ok: false, error: "Missing uid/score" });
-
   try {
+    const { uid, score } = req.body;
+    if (!uid) return res.status(400).json({ ok: false, error: "Thiếu UID" });
+
     const userRef = db.ref(`leaderboard/BlockL/${uid}`);
     const snap = await userRef.get();
+
+    // KIỂM TRA VÉ THAM GIA
     if (!snap.exists()) {
-      return res.json({ ok: false, error: "Chưa tham gia → không thể tải điểm" });
+      // Trả về lỗi rõ ràng để Client biết mà xử lý
+      return res.status(403).json({ ok: false, error: "BẠN CHƯA ĐĂNG KÝ THAM GIA TUẦN NÀY!" });
     }
 
-    const bestscore = snap.val().bestscore ?? 0;
-    console.log("UID:", uid);
-    console.log("BEST:", bestscore, typeof bestscore);
-    console.log("NEW :", score, typeof score);
-    if (score > bestscore) {
-      await userRef.update({ bestscore: score });
+    const currentData = snap.val();
+    const bestscore = currentData.bestscore || 0;
+
+    if (Number(score) > bestscore) {
+      await userRef.update({ bestscore: Number(score) });
       return res.json({ ok: true, newBest: true });
     }
+    
     res.json({ ok: true, newBest: false });
   } catch (e) {
-    res.json({ ok: false, error: e.message });
+    console.error("Backend Error:", e);
+    res.status(500).json({ ok: false, error: "Lỗi Server" });
   }
 });
 
