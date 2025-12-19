@@ -2,6 +2,7 @@ const express = require("express");
 const admin = require("firebase-admin");
 const cors = require("cors");
 const { v4: uuidv4 } = require("uuid");
+const fetch = require("node-fetch");
 
 const app = express();
 app.use(express.json());
@@ -187,43 +188,17 @@ app.post("/accept-rules", async (req, res) => {
   }
 });
 
-// --- Login endpoint (giới hạn 1 phút 1 lần) ---
-app.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ ok: false, error: "Missing email or password" });
-
-    // Lấy user từ DB
-    const snapshot = await db.ref("users").orderByChild("email").equalTo(email).get();
-    if (!snapshot.exists())
-      return res.status(404).json({ ok: false, error: "User not found" });
-
-    const userData = Object.values(snapshot.val())[0];
-
-    // Kiểm tra password
-    if (userData.password !== password)
-      return res.status(401).json({ ok: false, error: "Wrong password" });
-
-    const now = Date.now();
-    const lastLogin = userData.lastLoginAt || 0;
-
-    // Giới hạn 1 phút
-    if (now - lastLogin < 60 * 1000) {
-      const remaining = Math.ceil((60 * 1000 - (now - lastLogin)) / 1000);
-      return res.status(429).json({ ok: false, error: `Chỉ được login 1 lần mỗi phút. Vui lòng đợi ${remaining}s` });
-    }
-
-    // Cập nhật lastLoginAt
-    await db.ref("users/" + userData.uid).update({ lastLoginAt: now });
-
-    res.json({ ok: true, uid: userData.uid, rulesAccepted: !!userData.rulesAccepted });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
-});
-
+async function loginWithFirebase(email, password) {
+  const apiKey = process.env.FIREBASE_API_KEY; // đặt trong Render
+  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, returnSecureToken: true })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return { uid: data.localId, idToken: data.idToken };
+}
 // Lấy tất cả notifications, sắp xếp theo createAt giảm dần
 app.get("/notifications", async (req, res) => {
   try {
