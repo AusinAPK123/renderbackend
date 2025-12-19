@@ -108,7 +108,7 @@ app.post("/submit-score", async (req, res) => {
     const bestscore = snap.val().bestscore ?? 0;
     console.log("UID:", uid);
     console.log("BEST:", bestscore, typeof bestscore);
-    console.log("NEW :", newScore, typeof newScore);
+    console.log("NEW :", score, typeof score);
     if (score > bestscore) {
       await userRef.update({ bestscore: score });
       return res.json({ ok: true, newBest: true });
