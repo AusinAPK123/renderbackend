@@ -114,6 +114,7 @@ app.post("/submit-score", async (req, res) => {
   } catch (e) {
     res.json({ ok: false, error: e.message });
   }
+});
 
 app.post("/add-xp", async (req, res) => {
   try {
