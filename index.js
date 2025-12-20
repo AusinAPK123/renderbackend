@@ -8,7 +8,9 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// --- KHỞI TẠO FIREBASE ---
+/* =====================================================
+   FIREBASE INIT
+===================================================== */
 admin.initializeApp({
   credential: admin.credential.cert(
     JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
@@ -71,7 +73,7 @@ app.post("/login", async (req, res) => {
 });
 
 /* =====================================================
-   2. GET TOKEN (LINK SYSTEM – 24H / MAX 2 LẦN)
+   2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
 app.post("/get-token", async (req, res) => {
   try {
@@ -86,12 +88,12 @@ app.post("/get-token", async (req, res) => {
 
     let data = snap.val() || { count: 0, date: today };
 
-    // Qua ngày mới → reset
+    // Qua ngày → reset
     if (data.date !== today) {
       data = { count: 0, date: today };
     }
 
-    // Đã vượt tối đa hôm nay
+    // Đủ lượt hôm nay
     if (data.count >= 2) {
       return res.json({
         ok: true,
@@ -99,17 +101,17 @@ app.post("/get-token", async (req, res) => {
       });
     }
 
-    // Tạo token
     const token = crypto.randomBytes(16).toString("hex");
+    const now = Date.now();
 
     await db.ref(`sessions/${token}`).set({
       uid,
       linkId,
-      startAt: Date.now(),
+      startAt: now,
+      expiresAt: now + 6 * 60 * 60 * 1000, // 6 tiếng
       used: false
     });
 
-    // Tăng count
     await linkRef.set({
       count: data.count + 1,
       date: today
@@ -136,24 +138,35 @@ app.post("/use-token", async (req, res) => {
     const snap = await tokenRef.get();
     const tokenData = snap.val();
 
-    if (!tokenData || tokenData.used || tokenData.uid !== uid) {
-      return res.status(400).json({ ok: false, error: "Token không hợp lệ" });
+    if (!tokenData || tokenData.uid !== uid) {
+      return res.status(400).json({ ok: false, error: "Token không tồn tại" });
     }
 
-    // ⛔ Anti cheat: chạy quá nhanh
+    if (Date.now() > tokenData.expiresAt) {
+      return res.status(400).json({ ok: false, error: "Token đã hết hạn" });
+    }
+
+    if (tokenData.used) {
+      return res.status(400).json({
+        ok: false,
+        error: "Token đã được sử dụng",
+        usedAt: tokenData.usedAt || null
+      });
+    }
+
+    // Anti-cheat: quá nhanh
     if (Date.now() - tokenData.startAt < 15000) {
       await db.ref(`users/${uid}/coins`).set(-999999);
       return res.status(400).json({ ok: false, error: "Phát hiện gian lận" });
     }
 
-    // ✅ Cộng coin
     await db.ref(`users/${uid}/coins`).transaction(c => (c || 0) + 30);
-
-    // ✅ Cộng XP cố định
     await db.ref(`users/${uid}/xp`).transaction(x => (x || 0) + 5);
 
-    // ✅ Huỷ token
-    await tokenRef.update({ used: true });
+    await tokenRef.update({
+      used: true,
+      usedAt: Date.now()
+    });
 
     res.json({ ok: true, added: 30, xpAdded: 5 });
   } catch {
@@ -190,7 +203,7 @@ app.post("/submit-score", async (req, res) => {
 });
 
 /* =====================================================
-   5. CÁC ROUTE KHÁC (GIỮ NGUYÊN)
+   5. ROUTE KHÁC (GIỮ NGUYÊN)
 ===================================================== */
 app.post("/spend-coin", async (req, res) => {
   const { uid, type } = req.body;
