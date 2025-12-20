@@ -90,26 +90,64 @@ app.post("/get-token", async (req, res) => {
 });
 
 app.post("/use-token", async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.json({ ok: false, error: "Missing token" });
+
   try {
-    const { token, uid } = req.body;
     const tokenRef = db.ref(`sessions/${token}`);
-    const tokenSnap = await tokenRef.get();
-    const tokenData = tokenSnap.val();
+    const snap = await tokenRef.get();
 
-    if (!tokenData || tokenData.used || tokenData.uid !== uid) {
-        return res.status(400).json({ error: "Token không hợp lệ" });
+    if (!snap.exists()) {
+      return res.json({ ok: false, error: "Token không tồn tại" });
     }
 
-    // BẪY CHÍ MẠNG (15s)
-    if (Date.now() - tokenData.startAt < 15000) {
-        await db.ref(`users/${uid}/coins`).set(-999999);
-        return res.status(400).json({ error: "Pháp sư phát hiện! Acc bị ban." });
+    const data = snap.val();
+
+    if (data.used) {
+      return res.json({ ok: false, error: "Token đã được sử dụng" });
     }
 
-    await db.ref(`users/${uid}/coins`).transaction(c => (c || 0) + 30);
-    await tokenRef.update({ used: true });
-    res.json({ ok: true, added: 30 });
-  } catch (err) { res.status(500).json({ error: "Server error" }); }
+    const now = Date.now();
+
+    // min 5s, max 10 phút
+    if (now - data.startAt < 5000) {
+      return res.json({ ok: false, error: "Đi quá nhanh" });
+    }
+    if (now - data.startAt > 10 * 60 * 1000) {
+      return res.json({ ok: false, error: "Token hết hạn" });
+    }
+
+    const uid = data.uid; // ✅ UID CHỈ LẤY Ở ĐÂY
+
+    // --- cộng coin ---
+    const userRef = db.ref(`users/${uid}`);
+    await userRef.transaction(u => {
+      if (!u) return u;
+      u.coins = (u.coins || 0) + 10;
+      return u;
+    });
+
+    // --- tăng count link ---
+    const today = new Date().toISOString().slice(0, 10);
+    const countRef = db.ref(`linkCount/${uid}/${data.linkId}/${today}`);
+    await countRef.transaction(c => (c || 0) + 1);
+
+    // --- mark token used ---
+    await tokenRef.update({
+      used: true,
+      usedAt: now
+    });
+
+    return res.json({
+      ok: true,
+      uid,
+      added: 10
+    });
+
+  } catch (e) {
+    console.error(e);
+    res.json({ ok: false, error: e.message });
+  }
 });
 
 // --- 3. MULTI-GAME LEADERBOARD (NÂNG CẤP THEO Ý BẠN) ---
