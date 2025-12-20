@@ -136,12 +136,27 @@ app.post("/submit-score", async (req, res) => {
 
 // --- 4. CÁC ROUTE CÒN LẠI (GIỮ ĐÚNG LOGIC GỐC) ---
 app.post("/spend-coin", async (req, res) => {
-    const { uid, amount } = req.body;
-    const coinRef = db.ref(`users/${uid}/coins`);
-    const snap = await coinRef.get();
-    if((snap.val() || 0) < amount) return res.status(400).json({ error: "Không đủ coin" });
-    await coinRef.transaction(c => c - amount);
-    res.json({ ok: true });
+  const { uid, type } = req.body;
+
+  const costMap = {
+    revive: 100,
+    removeRow: 30,
+    removeCol: 30,
+    removeAll: 90
+  };
+
+  const cost = costMap[type];
+  if (!cost) return res.status(400).json({ ok: false, error: "Unknown type" });
+
+  const coinRef = db.ref(`users/${uid}/coins`);
+  const snap = await coinRef.get();
+
+  if ((snap.val() || 0) < cost) {
+    return res.json({ ok: false, error: "Không đủ coin" });
+  }
+
+  await coinRef.transaction(c => (c || 0) - cost);
+  res.json({ ok: true });
 });
 
 app.post("/add-xp", async (req, res) => {
