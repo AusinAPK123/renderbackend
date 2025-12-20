@@ -180,25 +180,31 @@ app.post("/use-token", async (req, res) => {
 app.post("/submit-score", async (req, res) => {
   try {
     const { uid, score, gameName } = req.body;
-    if (!gameName) {
-      return res.status(400).json({ error: "Thiếu tên game!" });
+    if (!uid || score == null || !gameName) {
+      return res.status(400).json({ ok: false, error: "Thiếu dữ liệu" });
     }
 
     const scoreRef = db.ref(`leaderboard/${gameName}/${uid}`);
     const snap = await scoreRef.get();
-    const current = snap.val() || { score: 0 };
 
-    if (score > current.score) {
+    // ✅ BẮT BUỘC BESTSCORE
+    const current = snap.val() || { bestscore: 0 };
+    const bestscore = Number(current.bestscore) || 0;
+    const newScore = Number(score) || 0;
+     
+    if (newScore > bestscore) {
       await scoreRef.set({
-        score,
+        bestscore: newScore,
         updatedAt: Date.now()
       });
+
       return res.json({ ok: true, newRecord: true });
     }
 
     res.json({ ok: true, newRecord: false });
-  } catch {
-    res.status(500).json({ error: "Lỗi lưu điểm" });
+  } catch (e) {
+    console.error("SUBMIT SCORE ERROR:", e);
+    res.status(500).json({ ok: false, error: "Lỗi lưu điểm" });
   }
 });
 
