@@ -187,13 +187,20 @@ app.post("/submit-score", async (req, res) => {
     const scoreRef = db.ref(`leaderboard/${gameName}/${uid}`);
     const snap = await scoreRef.get();
 
-    // ✅ BẮT BUỘC BESTSCORE
-    const current = snap.val() || { bestscore: 0 };
+    // ❌ CHƯA THAM GIA → CÚT
+    if (!snap.exists()) {
+      return res.json({
+        ok: false,
+        error: "Chưa tham gia minigame"
+      });
+    }
+
+    const current = snap.val();
     const bestscore = Number(current.bestscore) || 0;
     const newScore = Number(score) || 0;
-     
+
     if (newScore > bestscore) {
-      await scoreRef.set({
+      await scoreRef.update({
         bestscore: newScore,
         updatedAt: Date.now()
       });
