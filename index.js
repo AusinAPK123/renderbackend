@@ -76,55 +76,33 @@ app.post("/login", async (req, res) => {
    2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
 app.post("/get-token", async (req, res) => {
-  try {
-    const { uid, linkId } = req.body;
-    if (!uid || !linkId) {
-      return res.status(400).json({ ok: false });
-    }
+  const { uid, linkId } = req.body;
+  const today = new Date().toISOString().slice(0,10);
+  const linkRef = db.ref(`users/${uid}/links/${linkId}`);
+  const snap = await linkRef.get();
+  const data = snap.val() || { count: 0, date: today };
 
-    const today = new Date().toISOString().slice(0, 10);
-    const linkRef = db.ref(`users/${uid}/links/${linkId}`);
-    const snap = await linkRef.get();
-
-    let data = snap.val() || { count: 0, date: today };
-
-    // Qua ngày → reset
-    if (data.date !== today) {
-      data = { count: 0, date: today };
-    }
-
-    // Đủ lượt hôm nay
-    if (data.count >= 2) {
-      return res.json({
-        ok: true,
-        countToday: data.count
-      });
-    }
-
-    const token = crypto.randomBytes(16).toString("hex");
-    const now = Date.now();
-
-    await db.ref(`sessions/${token}`).set({
-      uid,
-      linkId,
-      startAt: now,
-      expiresAt: now + 6 * 60 * 60 * 1000, // 6 tiếng
-      used: false
-    });
-
-    await linkRef.set({
-      count: data.count + 1,
-      date: today
-    });
-
-    res.json({
-      ok: true,
-      token,
-      countToday: data.count + 1
-    });
-  } catch {
-    res.status(500).json({ ok: false });
+  // Reset ngày nếu khác
+  if(data.date !== today){
+    data.count = 0;
+    data.date = today;
   }
+
+  const token = crypto.randomBytes(16).toString("hex");
+  const now = Date.now();
+  await db.ref(`sessions/${token}`).set({
+    uid,
+    linkId,
+    startAt: now,
+    expiresAt: now + 6*60*60*1000,
+    used: false
+  });
+
+  res.json({
+    ok: true,
+    token,
+    countToday: data.count
+  });
 });
 
 /* =====================================================
