@@ -94,7 +94,8 @@ app.post("/get-token", async (req, res) => {
     uid,
     linkId,
     startAt: now,
-    expiresAt: now + 6*60*60*1000,
+    expiresAt: now + 1*60*60*1000,
+    deleteAt: now + 6*60*60*1000,
     used: false
   });
 
