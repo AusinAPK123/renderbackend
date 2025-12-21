@@ -240,6 +240,45 @@ app.get("/check-rules", async (req, res) => {
   });
 });
 
+async function clean() {
+  const usersSnap = await db.ref("users").get();
+  const users = usersSnap.val() || {};
+
+  const today = new Date().toISOString().slice(0, 10);
+  const now = Date.now();
+
+  for (const uid in users) {
+    // --- clean links ---
+    const links = users[uid].links || {};
+    for (const linkId in links) {
+      const link = links[linkId];
+      if (link.date && link.date !== today) {
+        await db.ref(`users/${uid}/links/${linkId}`).update({
+          count: 0,
+          date: today
+        });
+      }
+    }
+
+    // --- clean tokens ---
+    const sessionsSnap = await db.ref("sessions").orderByChild("uid").equalTo(uid).get();
+    const sessions = sessionsSnap.val() || {};
+    for (const tokenId in sessions) {
+      const token = sessions[tokenId];
+      if (token.deleteAt && token.deleteAt < now) {
+        await db.ref(`sessions/${tokenId}`).remove();
+      }
+    }
+  }
+
+  console.log("Clean finished at", new Date().toISOString());
+}
+
+// --- Chạy clean mỗi 5 phút ---
+setInterval(() => {
+  clean().catch(console.error);
+}, 5 * 60 * 1000);
+
 /* =====================================================
    START SERVER
 ===================================================== */
