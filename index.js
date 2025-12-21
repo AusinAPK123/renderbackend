@@ -222,12 +222,6 @@ app.post("/spend-coin", async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/add-xp", async (req, res) => {
-  const { uid, xp } = req.body;
-  await db.ref(`users/${uid}/xp`).transaction(c => (c || 0) + xp);
-  res.json({ ok: true });
-});
-
 app.post("/accept-rules", async (req, res) => {
   const { uid } = req.body;
   await db.ref(`users/${uid}/rulesAccepted`).set(true);
