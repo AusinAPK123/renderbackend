@@ -111,15 +111,17 @@ app.post("/get-token", async (req, res) => {
 ===================================================== */
 app.post("/use-token", async (req, res) => {
   try {
-    const { token, uid } = req.body;
+    const { token } = req.body;
 
     const tokenRef = db.ref(`sessions/${token}`);
     const snap = await tokenRef.get();
     const tokenData = snap.val();
 
-    if (!tokenData || tokenData.uid !== uid) {
+    if (!tokenData) {
       return res.status(400).json({ ok: false, error: "Token không tồn tại" });
     }
+
+    const uid = tokenData.uid;
 
     if (Date.now() > tokenData.expiresAt) {
       return res.status(400).json({ ok: false, error: "Token đã hết hạn" });
@@ -241,14 +243,16 @@ app.get("/check-rules", async (req, res) => {
 });
 
 async function clean() {
-  const usersSnap = await db.ref("users").get();
-  const users = usersSnap.val() || {};
-
   const today = new Date().toISOString().slice(0, 10);
   const now = Date.now();
 
+  /* =========================
+     1. CLEAN LINKS (theo user)
+  ========================== */
+  const usersSnap = await db.ref("users").get();
+  const users = usersSnap.val() || {};
+
   for (const uid in users) {
-    // --- clean links ---
     const links = users[uid].links || {};
     for (const linkId in links) {
       const link = links[linkId];
@@ -259,22 +263,27 @@ async function clean() {
         });
       }
     }
+  }
 
-    // --- clean tokens ---
-    const sessionsSnap = await db.ref("sessions").orderByChild("uid").equalTo(uid).get();
-    const sessions = sessionsSnap.val() || {};
-    for (const tokenId in sessions) {
-      const token = sessions[tokenId];
-      if (token.deleteAt && token.deleteAt < now) {
-        await db.ref(`sessions/${tokenId}`).remove();
-      }
+  /* =========================
+     2. CLEAN TOKENS (GLOBAL)
+  ========================== */
+  const sessionsSnap = await db.ref("sessions").get();
+  const sessions = sessionsSnap.val() || {};
+
+  for (const tokenId in sessions) {
+    const token = sessions[tokenId];
+    if (token.deleteAt && token.deleteAt < now) {
+      await db.ref(`sessions/${tokenId}`).remove();
     }
   }
 
-  console.log("Clean finished at", new Date().toISOString());
-}
+  console.log("🧹 Clean finished at", new Date().toISOString());
+       }
+// chạy clean ngay khi server khởi động
+clean().catch(console.error);
 
-// --- Chạy clean mỗi 5 phút ---
+// sau đó cứ 5 phút clean 1 lần nếu server còn sống
 setInterval(() => {
   clean().catch(console.error);
 }, 5 * 60 * 1000);
