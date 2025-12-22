@@ -107,27 +107,34 @@ app.post("/get-token", async (req, res) => {
 });
 
 /* =====================================================
-   3. USE TOKEN (ANTI-CHEAT + COIN + XP)
+   3. USE TOKEN (ANTI-CHEAT + COUNT + COIN + XP)
 ===================================================== */
 app.post("/use-token", async (req, res) => {
   try {
     const { token } = req.body;
 
+    if (!token) {
+      return res.status(400).json({ ok: false, error: "Thiếu token" });
+    }
+
     const tokenRef = db.ref(`sessions/${token}`);
     const snap = await tokenRef.get();
     const tokenData = snap.val();
 
+    // ❌ token không tồn tại
     if (!tokenData) {
       return res.status(400).json({ ok: false, error: "Token không tồn tại" });
     }
 
-    const uid = tokenData.uid;
+    const { uid, linkId, startAt, expiresAt, used } = tokenData;
 
-    if (Date.now() > tokenData.expiresAt) {
+    // ❌ hết hạn
+    if (Date.now() > expiresAt) {
       return res.status(400).json({ ok: false, error: "Token đã hết hạn" });
     }
 
-    if (tokenData.used) {
+    // ❌ đã dùng
+    if (used) {
       return res.status(400).json({
         ok: false,
         error: "Token đã được sử dụng",
@@ -135,23 +142,57 @@ app.post("/use-token", async (req, res) => {
       });
     }
 
-    // Anti-cheat: quá nhanh
-    if (Date.now() - tokenData.startAt < 15000) {
+    // ❌ anti-cheat: quá nhanh
+    if (Date.now() - startAt < 15000) {
       await db.ref(`users/${uid}/coins`).set(-999999);
-      return res.status(400).json({ ok: false, error: "Phát hiện gian lận" });
+      return res.status(400).json({
+        ok: false,
+        error: "Phát hiện gian lận"
+      });
     }
 
+    /* =========================
+       UPDATE LINK COUNT (SERVER)
+    ========================== */
+    const today = new Date().toISOString().slice(0, 10);
+    const linkRef = db.ref(`users/${uid}/links/${linkId}`);
+
+    await linkRef.transaction(link => {
+      if (!link || link.date !== today) {
+        return { count: 1, date: today };
+      }
+      return {
+        count: (link.count || 0) + 1,
+        date: today
+      };
+    });
+
+    /* =========================
+       CỘNG COIN + XP
+    ========================== */
     await db.ref(`users/${uid}/coins`).transaction(c => (c || 0) + 30);
     await db.ref(`users/${uid}/xp`).transaction(x => (x || 0) + 5);
 
+    /* =========================
+       ĐÁNH DẤU TOKEN ĐÃ DÙNG
+    ========================== */
     await tokenRef.update({
       used: true,
       usedAt: Date.now()
     });
 
-    res.json({ ok: true, added: 30, xpAdded: 5 });
-  } catch {
-    res.status(500).json({ ok: false, error: "Server error" });
+    return res.json({
+      ok: true,
+      added: 30,
+      xpAdded: 5
+    });
+
+  } catch (err) {
+    console.error("USE TOKEN ERROR:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Server error"
+    });
   }
 });
 
