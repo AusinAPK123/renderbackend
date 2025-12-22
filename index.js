@@ -287,27 +287,30 @@ async function clean() {
   const today = new Date().toISOString().slice(0, 10);
   const now = Date.now();
 
+  const updates = {};
+
   /* =========================
-     1. CLEAN LINKS (theo user)
+     1. CLEAN LINKS
   ========================== */
   const usersSnap = await db.ref("users").get();
   const users = usersSnap.val() || {};
 
   for (const uid in users) {
-    const links = users[uid].links || {};
+    const links = users[uid].links;
+    if (!links) continue;
+
     for (const linkId in links) {
       const link = links[linkId];
+
       if (link.date && link.date !== today) {
-        await db.ref(`users/${uid}/links/${linkId}`).update({
-          count: 0,
-          date: today
-        });
+        updates[`users/${uid}/links/${linkId}/count`] = 0;
+        updates[`users/${uid}/links/${linkId}/date`] = today;
       }
     }
   }
 
   /* =========================
-     2. CLEAN TOKENS (GLOBAL)
+     2. CLEAN TOKENS
   ========================== */
   const sessionsSnap = await db.ref("sessions").get();
   const sessions = sessionsSnap.val() || {};
@@ -315,12 +318,19 @@ async function clean() {
   for (const tokenId in sessions) {
     const token = sessions[tokenId];
     if (token.deleteAt && token.deleteAt < now) {
-      await db.ref(`sessions/${tokenId}`).remove();
+      updates[`sessions/${tokenId}`] = null;
     }
   }
 
+  /* =========================
+     APPLY UPDATES (1 REQUEST)
+  ========================== */
+  if (Object.keys(updates).length > 0) {
+    await db.ref().update(updates);
+  }
+
   console.log("🧹 Clean finished at", new Date().toISOString());
-       }
+}
 // chạy clean ngay khi server khởi động
 clean().catch(console.error);
 
