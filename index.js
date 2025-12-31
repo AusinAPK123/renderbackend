@@ -322,6 +322,36 @@ async function clean() {
     }
   }
 
+/* =====================================================
+   NOTIFICATIONS ROUTE
+===================================================== */
+app.get("/notifications", async (req, res) => {
+  try {
+    const snap = await db.ref("notifications").get();
+    const data = snap.val() || {};
+
+    // Convert object → array
+    const list = Object.keys(data).map(id => ({
+      id,
+      title: data[id].title || "",
+      content: data[id].content || "",
+      createdAt: data[id].createdAt || 0
+    }));
+
+    // Sort: mới nhất lên đầu
+    list.sort((a, b) => b.createdAt - a.createdAt);
+
+    res.json({
+      ok: true,
+      notifications: list
+    });
+
+  } catch (err) {
+    console.error("NOTIFICATIONS ERROR:", err);
+    res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
   /* =========================
      APPLY UPDATES (1 REQUEST)
   ========================== */
