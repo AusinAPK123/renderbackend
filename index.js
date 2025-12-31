@@ -197,19 +197,24 @@ app.post("/use-token", async (req, res) => {
 });
 
 /* =====================================================
-   4. MULTI-GAME LEADERBOARD
+   4. MULTI-GAME LEADERBOARD (with mode)
 ===================================================== */
 app.post("/submit-score", async (req, res) => {
   try {
-    const { uid, score, gameName } = req.body;
+    const { uid, score, gameName, mode } = req.body;
     if (!uid || score == null || !gameName) {
       return res.status(400).json({ ok: false, error: "Thiếu dữ liệu" });
     }
 
-    const scoreRef = db.ref(`leaderboard/${gameName}/${uid}`);
+    // 🔥 Build path động
+    let scorePath = `leaderboard/${gameName}`;
+    if (mode) scorePath += `/${mode}`; // chỉ thêm nếu client gửi
+    scorePath += `/${uid}`;
+
+    const scoreRef = db.ref(scorePath);
     const snap = await scoreRef.get();
 
-    // ❌ CHƯA THAM GIA → CÚT
+    // ❌ CHƯA THAM GIA
     if (!snap.exists()) {
       return res.json({
         ok: false,
