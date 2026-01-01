@@ -201,37 +201,43 @@ app.post("/use-token", async (req, res) => {
 ===================================================== */
 app.post("/submit-score", async (req, res) => {
   try {
-    const { uid, score, gameName, mode } = req.body;
+    // Thêm 'order' vào destructuring (mặc định là 'desc' nếu không gửi)
+    const { uid, score, gameName, mode, order = 'desc' } = req.body;
+    
     if (!uid || score == null || !gameName) {
       return res.status(400).json({ ok: false, error: "Thiếu dữ liệu" });
     }
 
-    // 🔥 Build path động
     let scorePath = `leaderboard/${gameName}`;
-    if (mode) scorePath += `/${mode}`; // chỉ thêm nếu client gửi
+    if (mode) scorePath += `/${mode}`;
     scorePath += `/${uid}`;
 
     const scoreRef = db.ref(scorePath);
     const snap = await scoreRef.get();
 
-    // ❌ CHƯA THAM GIA
     if (!snap.exists()) {
-      return res.json({
-        ok: false,
-        error: "Chưa tham gia minigame"
-      });
+      return res.json({ ok: false, error: "Chưa tham gia minigame" });
     }
 
     const current = snap.val();
-    const bestscore = Number(current.bestscore) || 0;
-    const newScore = Number(score) || 0;
+    const bestscore = Number(current.bestscore) || (order === 'asc' ? Infinity : 0);
+    const newScore = Number(score);
 
-    if (newScore > bestscore) {
+    // 🔥 LOGIC SO SÁNH LINH HOẠT
+    let isNewRecord = false;
+    if (order === 'asc') {
+      // Game tính thời gian: score mới phải NHỎ HƠN score cũ
+      if (newScore < bestscore) isNewRecord = true;
+    } else {
+      // Game tính điểm: score mới phải LỚN HƠN score cũ
+      if (newScore > bestscore) isNewRecord = true;
+    }
+
+    if (isNewRecord) {
       await scoreRef.update({
         bestscore: newScore,
         updatedAt: Date.now()
       });
-
       return res.json({ ok: true, newRecord: true });
     }
 
@@ -241,6 +247,7 @@ app.post("/submit-score", async (req, res) => {
     res.status(500).json({ ok: false, error: "Lỗi lưu điểm" });
   }
 });
+
 
 /* =====================================================
    5. ROUTE KHÁC (GIỮ NGUYÊN)
