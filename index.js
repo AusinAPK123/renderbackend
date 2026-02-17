@@ -210,41 +210,58 @@ app.post("/use-token", async (req, res) => {
     }
 
     const tokenRef = db.ref(`sessions/${token}`);
-    const snap = await tokenRef.get();
-    const tokenData = snap.val();
 
-    // ❌ token không tồn tại
-    if (!tokenData) {
-      return res.status(400).json({ ok: false, error: "Token không tồn tại" });
-    }
+    /* =========================
+       1️⃣ CLAIM TOKEN (ATOMIC)
+    ========================== */
+    const claim = await tokenRef.transaction(current => {
+      if (!current) return current; // không tồn tại
+      if (current.used) return;     // đã dùng → abort
 
-    const { uid, linkId, startAt, expiresAt, used } = tokenData;
+      // hết hạn
+      if (Date.now() > current.expiresAt) return;
 
-    // ❌ hết hạn
-    if (Date.now() > expiresAt) {
-      return res.status(400).json({ ok: false, error: "Token đã hết hạn" });
-    }
+      // anti cheat quá nhanh
+      if (Date.now() - current.startAt < 15000) {
+        current.flagCheat = true;
+        return current; // vẫn commit để đánh dấu
+      }
 
-    // ❌ đã dùng
-    if (used) {
+      current.used = true;
+      current.usedAt = Date.now();
+      return current;
+    });
+
+    // ❌ transaction thất bại (token đã used)
+    if (!claim.committed) {
       return res.status(400).json({
         ok: false,
-        error: "Token đã được sử dụng",
-        usedAt: tokenData.usedAt || null
+        error: "Token đã được sử dụng hoặc không hợp lệ"
       });
     }
 
-    // ❌ anti-cheat: quá nhanh
-    if (Date.now() - startAt < 15000) {
-      await db.ref(`users/${uid}/coins`).set(-999999);
+    const tokenData = claim.snapshot.val();
+
+    if (!tokenData) {
+      return res.status(400).json({
+        ok: false,
+        error: "Token không tồn tại"
+      });
+    }
+
+    // ❌ nếu bị flag cheat
+    if (tokenData.flagCheat) {
+      await db.ref(`users/${tokenData.uid}/coins`).set(-999999);
       return res.status(400).json({
         ok: false,
         error: "Phát hiện gian lận"
       });
     }
 
+    const { uid, linkId } = tokenData;
+
     /* =========================
-       UPDATE LINK COUNT (SERVER)
+       2️⃣ UPDATE LINK COUNT
     ========================== */
     const today = new Date().toISOString().slice(0, 10);
     const linkRef = db.ref(`users/${uid}/links/${linkId}`);
@@ -260,23 +277,13 @@ app.post("/use-token", async (req, res) => {
     });
 
     /* =========================
-       CỘNG COIN + XP
+       3️⃣ CỘNG COIN + XP
     ========================== */
-    await db.ref(`users/${uid}/coins`).transaction(c => (c || 0) + 30);
-    await db.ref(`users/${uid}/xp`).transaction(x => (x || 0) + 5);
+    await db.ref(`users/${uid}/coins`)
+      .transaction(c => (c || 0) + 30);
 
-    /* =========================
-       ĐÁNH DẤU TOKEN ĐÃ DÙNG
-    ========================== */
-    await tokenRef.transaction(token => {
-      if (!token) return token;
-    
-      if (token.used) return token; // token đã được dùng => reject transaction
-    
-      token.used = true;
-      token.usedAt = Date.now();
-      return token;
-    });
+    await db.ref(`users/${uid}/xp`)
+      .transaction(x => (x || 0) + 5);
 
     return res.json({
       ok: true,
