@@ -376,7 +376,7 @@ app.post("/spend-coin", authenticate, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/accept-rules", async (req, res) => {
+app.post("/accept-rules", authenticate, async (req, res) => {
   const uid = req.user.uid;
   await db.ref(`users/${uid}/rulesAccepted`).set(true);
   res.json({ ok: true });
