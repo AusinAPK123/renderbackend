@@ -26,33 +26,25 @@ const db = admin.database();
 ===================================================== */
 const authenticate = async (req, res, next) => {
   try {
-    const { uid, sessionToken } = req.body;
+    const { sessionToken } = req.body;
 
-    if (!uid || !sessionToken) {
-      return res.status(401).json({
-        ok: false,
-        error: "Yêu cầu đăng nhập lại"
-      });
+    if (!sessionToken) {
+      return res.status(401).json({ ok: false });
     }
 
-    const snap = await db.ref(`users/${uid}/session/token`).get();
+    const snap = await db.ref(`userSessions/${sessionToken}`).get();
 
-    if (!snap.exists() || snap.val() !== sessionToken) {
-      return res.status(401).json({
-        ok: false,
-        error: "Phiên đăng nhập không hợp lệ"
-      });
+    if (!snap.exists()) {
+      return res.status(401).json({ ok: false });
     }
 
-    req.user = { uid }
+    const { uid } = snap.val();
+
+    req.user = { uid };
 
     next();
   } catch (err) {
-    console.error("AUTH ERROR:", err);
-    res.status(500).json({
-      ok: false,
-      error: "Lỗi xác thực hệ thống"
-    });
+    res.status(500).json({ ok: false });
   }
 };
 
@@ -92,9 +84,9 @@ app.post("/login", async (req, res) => {
     }
 
     const sessionToken = crypto.randomBytes(20).toString("hex");
-    await userRef.child("session").set({
-      token: sessionToken,
-      lastLogin: Date.now()
+    await db.ref(`userSessions/${sessionToken}`).set({
+       uid,
+       createdAt: Date.now()
     });
 
     res.json({
