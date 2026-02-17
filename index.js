@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 const cors = require("cors");
 const fetch = require("node-fetch");
 const crypto = require("crypto");
+const rateLimit = require("express-rate-limit");
 
 const app = express();
 app.use(express.json());
@@ -72,10 +73,17 @@ app.post("/login", async (req, res) => {
   }
 });
 
+const getTokenLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 phút
+  max: 3, // tối đa 3 lần
+  message: { ok: false, error: "Quá nhiều yêu cầu, thử lại sau" },
+  keyGenerator: (req) => req.body.uid || req.ip // Ưu tiên UID
+});
+
 /* =====================================================
    2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
-app.post("/get-token", async (req, res) => {
+app.post("/get-token", getTokenLimiter, async (req, res) => {
   const { uid, linkId } = req.body;
   const today = new Date().toISOString().slice(0,10);
   const linkRef = db.ref(`users/${uid}/links/${linkId}`);
@@ -86,6 +94,7 @@ app.post("/get-token", async (req, res) => {
   if(data.date !== today){
     data.count = 0;
     data.date = today;
+    await linkRef.set(data);
   }
 
   const token = crypto.randomBytes(16).toString("hex");
@@ -111,7 +120,7 @@ app.post("/get-token", async (req, res) => {
 ===================================================== */
 app.post("/use-token", async (req, res) => {
   try {
-    const { token } = req.body;
+    const { token, uid } = req.body;
 
     if (!token) {
       return res.status(400).json({ ok: false, error: "Thiếu token" });
@@ -176,9 +185,14 @@ app.post("/use-token", async (req, res) => {
     /* =========================
        ĐÁNH DẤU TOKEN ĐÃ DÙNG
     ========================== */
-    await tokenRef.update({
-      used: true,
-      usedAt: Date.now()
+    await tokenRef.transaction(token => {
+      if (!token) return token;
+    
+      if (token.used) return token; // token đã được dùng => reject transaction
+    
+      token.used = true;
+      token.usedAt = Date.now();
+      return token;
     });
 
     return res.json({
@@ -333,6 +347,15 @@ async function clean() {
       updates[`sessions/${tokenId}`] = null;
     }
   }
+  
+  /* =========================
+     APPLY UPDATES (1 REQUEST)
+  ========================== */
+  if (Object.keys(updates).length > 0) {
+    await db.ref().update(updates);
+  }
+  console.log("🧹 Clean finished at", new Date().toISOString());
+}
 
 /* =====================================================
    NOTIFICATIONS ROUTE
@@ -363,16 +386,6 @@ app.get("/notifications", async (req, res) => {
     res.status(500).json({ ok: false, error: "Server error" });
   }
 });
-
-  /* =========================
-     APPLY UPDATES (1 REQUEST)
-  ========================== */
-  if (Object.keys(updates).length > 0) {
-    await db.ref().update(updates);
-  }
-
-  console.log("🧹 Clean finished at", new Date().toISOString());
-}
 // chạy clean ngay khi server khởi động
 clean().catch(console.error);
 
