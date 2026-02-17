@@ -299,7 +299,8 @@ app.post("/use-token", async (req, res) => {
 app.post("/submit-score", authenticate, async (req, res) => {
   try {
     // Thêm 'order' vào destructuring (mặc định là 'desc' nếu không gửi)
-    const { uid, score, gameName, mode, order = 'desc' } = req.body;
+    const uid = req.user.uid;
+    const { score, gameName, mode, order = 'desc' } = req.body;
     
     if (!uid || score == null || !gameName) {
       return res.status(400).json({ ok: false, error: "Thiếu dữ liệu" });
@@ -350,7 +351,8 @@ app.post("/submit-score", authenticate, async (req, res) => {
    5. ROUTE KHÁC (GIỮ NGUYÊN)
 ===================================================== */
 app.post("/spend-coin", authenticate, async (req, res) => {
-  const { uid, type } = req.body;
+  const { type } = req.body;
+  const uid = req.user.uid;
 
   const costMap = {
     revive: 100,
