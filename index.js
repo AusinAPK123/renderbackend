@@ -44,6 +44,8 @@ const authenticate = async (req, res, next) => {
       });
     }
 
+    req.user = { uid }
+
     next();
   } catch (err) {
     console.error("AUTH ERROR:", err);
@@ -148,6 +150,53 @@ app.post("/get-token", authenticate, getTokenLimiter, async (req, res) => {
     countToday: data.count
   });
 });
+
+// Giới hạn Web chỉ được gọi tối đa 20 lần / 1 phút để tránh bị bot spam quét UID
+const publicLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 20,
+  message: { ok: false }
+});
+
+app.get("/public-link-check", publicLimiter, async (req, res) => {
+  try {
+    const { uid, linkId } = req.query;
+    if (!uid || !linkId) return res.json({ ok: false, error: "Missing ID" });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const snap = await db.ref(`users/${uid}/links/${linkId}`).get();
+    const data = snap.val() || { count: 0, date: today };
+
+    // Trả về số lần vượt nếu đúng ngày hôm nay, ngược lại trả về 0
+    res.json({
+      ok: true,
+      countToday: data.date === today ? data.count : 0
+    });
+  } catch (err) {
+    res.json({ ok: false });
+  }
+});
+
+app.post("/get-user-data", authenticate, async (req, res) => {
+  try {
+    const uid = req.user.uid;   // 👈 LẤY TỪ AUTH, KHÔNG TỪ BODY
+
+    const snap = await db.ref(`users/${uid}`).get();
+    const userData = snap.val() || {};
+
+    res.json({
+      ok: true,
+      coins: userData.coins || 0,
+      xp: userData.xp || 0,
+      rulesAccepted: !!userData.rulesAccepted,
+      links: userData.links || {}
+    });
+
+  } catch (err) {
+    res.status(500).json({ ok: false });
+  }
+});
+
 
 /* =====================================================
    3. USE TOKEN (ANTI-CHEAT + COUNT + COIN + XP)
