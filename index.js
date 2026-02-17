@@ -22,6 +22,40 @@ admin.initializeApp({
 const db = admin.database();
 
 /* =====================================================
+   AUTH MIDDLEWARE (SESSION TOKEN)
+===================================================== */
+const authenticate = async (req, res, next) => {
+  try {
+    const { uid, sessionToken } = req.body;
+
+    if (!uid || !sessionToken) {
+      return res.status(401).json({
+        ok: false,
+        error: "Yêu cầu đăng nhập lại"
+      });
+    }
+
+    const snap = await db.ref(`users/${uid}/session/token`).get();
+
+    if (!snap.exists() || snap.val() !== sessionToken) {
+      return res.status(401).json({
+        ok: false,
+        error: "Phiên đăng nhập không hợp lệ"
+      });
+    }
+
+    next();
+  } catch (err) {
+    console.error("AUTH ERROR:", err);
+    res.status(500).json({
+      ok: false,
+      error: "Lỗi xác thực hệ thống"
+    });
+  }
+};
+
+
+/* =====================================================
    HELPER LOGIN (GIỮ NGUYÊN)
 ===================================================== */
 async function loginWithFirebase(email, password) {
@@ -83,7 +117,7 @@ const getTokenLimiter = rateLimit({
 /* =====================================================
    2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
-app.post("/get-token", getTokenLimiter, async (req, res) => {
+app.post("/get-token", authenticate, getTokenLimiter, async (req, res) => {
   const { uid, linkId } = req.body;
   const today = new Date().toISOString().slice(0,10);
   const linkRef = db.ref(`users/${uid}/links/${linkId}`);
@@ -120,7 +154,7 @@ app.post("/get-token", getTokenLimiter, async (req, res) => {
 ===================================================== */
 app.post("/use-token", async (req, res) => {
   try {
-    const { token, uid } = req.body;
+    const { token } = req.body;
 
     if (!token) {
       return res.status(400).json({ ok: false, error: "Thiếu token" });
@@ -213,7 +247,7 @@ app.post("/use-token", async (req, res) => {
 /* =====================================================
    4. MULTI-GAME LEADERBOARD (with mode)
 ===================================================== */
-app.post("/submit-score", async (req, res) => {
+app.post("/submit-score", authenticate, async (req, res) => {
   try {
     // Thêm 'order' vào destructuring (mặc định là 'desc' nếu không gửi)
     const { uid, score, gameName, mode, order = 'desc' } = req.body;
@@ -266,7 +300,7 @@ app.post("/submit-score", async (req, res) => {
 /* =====================================================
    5. ROUTE KHÁC (GIỮ NGUYÊN)
 ===================================================== */
-app.post("/spend-coin", async (req, res) => {
+app.post("/spend-coin", authenticate, async (req, res) => {
   const { uid, type } = req.body;
 
   const costMap = {
