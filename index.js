@@ -286,7 +286,7 @@ app.post("/get-user-data", authenticate, async (req, res) => {
 
     res.json({
       ok: true,
-      name: userData.name
+      name: userData.name,
       coins: userData.coins || 0,
       xp: userData.xp || 0,
       rulesAccepted: !!userData.rulesAccepted,
