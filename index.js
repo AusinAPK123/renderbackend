@@ -277,7 +277,7 @@ app.get("/public-link-check", publicLimiter, async (req, res) => {
   }
 });
 
-app.post("/get-user-data", async (req, res) => {
+app.post("/get-user-data", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;   // 👈 LẤY TỪ AUTH, KHÔNG TỪ BODY
 
