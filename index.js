@@ -108,6 +108,114 @@ const getTokenLimiter = rateLimit({
   keyGenerator: (req) => req.body.uid || req.ip // Ưu tiên UID
 });
 
+app.post("/get-room", authenticate, async (req, res) => {
+  try {
+    const uid1 = req.user.uid;        // Người gửi request
+    const uid2 = req.body.uid2;       // Người kia
+
+    if (!uid2) return res.json({ ok: false, error: "missing uid2" });
+
+    // Tạo room ID theo cách ổn định
+    const roomId = [uid1, uid2].sort().join("_");
+
+    // Kiểm tra trong DB
+    const snap = await db.ref(`rooms/${roomId}`).get();
+
+    if (!snap.exists()) {
+      // Tạo room mới
+      await db.ref(`rooms/${roomId}`).set({
+        members: {
+          [uid1]: true,
+          [uid2]: true,
+        },
+        createdAt: Date.now(),
+      });
+    }
+
+    return res.json({ ok: true, roomId });
+
+  } catch (err) {
+    return res.json({ ok: false });
+  }
+});
+
+const lastMsgTime = {};
+
+function msgrateLimit(req, res, next) {
+  const uid = req.user.uid;
+  const now = Date.now();
+
+  if (lastMsgTime[uid] && now - lastMsgTime[uid] < 1000) {
+    return res.json({ ok: false, error: "slow down" });
+  }
+
+  lastMsgTime[uid] = now;
+  next();
+}
+
+app.post("/upmessage", authenticate, msgrateLimit, async (req, res) => {
+  try {
+    const sender = req.user.uid;
+    const { roomId, message } = req.body;
+
+    if (!roomId || !message) {
+      return res.json({ ok: false, error: "missing fields" });
+    }
+
+    // Validate roomId format: chỉ đúng 2 uid
+    const parts = roomId.split("_");
+    if (parts.length !== 2) {
+      return res.json({ ok: false, error: "invalid roomId" });
+    }
+
+    const [uidA, uidB] = parts;
+    
+    // Kiểm tra: sender phải là 1 trong 2 uid
+    if (sender !== uidA && sender !== uidB) {
+      return res.json({ ok: false, error: "not allowed" });
+    }
+
+    // Lấy lại room (reload để tránh dùng snap cũ)
+    let roomSnap = await db.ref(`rooms/${roomId}`).get();
+
+    // Nếu room chưa tồn tại → auto create
+    if (!roomSnap.exists()) {
+      await db.ref(`rooms/${roomId}`).set({
+        members: {
+          [uidA]: true,
+          [uidB]: true
+        },
+        createdAt: Date.now(),
+      });
+
+      // Load lại tránh members undefined
+      roomSnap = await db.ref(`rooms/${roomId}`).get();
+    }
+
+    const roomData = roomSnap.val();
+    const members = roomData.members || {};
+
+    // Kiểm tra sender có thuộc room không
+    if (!members[sender]) {
+      return res.json({ ok: false, error: "not allowed" });
+    }
+
+    // Ghi tin nhắn
+    const msgRef = db.ref(`messages/${roomId}`).push();
+    await msgRef.set({
+      sender,
+      message,
+      time: Date.now()
+    });
+
+    return res.json({ ok: true });
+
+  } catch (err) {
+    console.error("UPMESSAGE ERROR:", err);
+    return res.json({ ok: false });
+  }
+});
+
 /* =====================================================
    2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
