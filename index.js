@@ -151,6 +151,29 @@ function msgrateLimit(req, res, next) {
   next();
 }
 
+app.post("/get-user-list", authenticate, async (req, res) => {
+  try {
+    const myUid = req.user.uid;
+    const snap = await db.ref("users").get();
+    const users = snap.val() || {};
+
+    const list = Object.entries(users)
+      .filter(([uid]) => uid !== myUid)
+      .map(([uid, u]) => ({
+        uid,
+        name: u?.name || "Unknown",
+        level: Number(u?.level ?? u?.lv ?? 0),
+      }))
+      .sort((a, b) => b.level - a.level);
+
+    return res.json({ ok: true, users: list });
+  } catch (err) {
+    console.error("GET_USER_LIST ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+
 app.post("/upmessage", authenticate, msgrateLimit, async (req, res) => {
   try {
     const sender = req.user.uid;
