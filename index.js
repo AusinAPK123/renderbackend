@@ -22,25 +22,35 @@ admin.initializeApp({
 const db = admin.database();
 
 /* =====================================================
+   TOKEN HELPERS
+===================================================== */
+const SESSION_TTL_MS = 45 * 60 * 1000; // 45 phút
+
+function genToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString("hex");
+}
+
+
+/* =====================================================
    AUTH MIDDLEWARE (SESSION TOKEN)
 ===================================================== */
 const authenticate = async (req, res, next) => {
   try {
     const sessionToken = req.headers["x-session-token"];
+    if (!sessionToken) return res.status(401).json({ ok: false });
 
-    if (!sessionToken) {
-      return res.status(401).json({ ok: false });
+    const ref = db.ref(`userSessions/${sessionToken}`);
+    const snap = await ref.get();
+    if (!snap.exists()) return res.status(401).json({ ok: false });
+
+    const s = snap.val();
+    if (!s.expiresAt || Date.now() > s.expiresAt) {
+      await ref.remove();
+      return res.status(401).json({ ok: false, error: "Session expired" });
     }
 
-    const snap = await db.ref(`userSessions/${sessionToken}`).get();
-
-    if (!snap.exists()) {
-      return res.status(401).json({ ok: false });
-    }
-
-    req.user = { uid: snap.val().uid };
+    req.user = { uid: s.uid };
     next();
-     
   } catch (err) {
     res.status(500).json({ ok: false });
   }
@@ -66,7 +76,7 @@ async function loginWithFirebase(email, password) {
 }
 
 /* =====================================================
-   1. LOGIN & SESSION
+   LOGIN -> TRẢ USER TOKEN
 ===================================================== */
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
@@ -81,23 +91,60 @@ app.post("/login", async (req, res) => {
       return res.status(403).json({ ok: false, error: "Tài khoản bị phong ấn!" });
     }
 
-    const sessionToken = crypto.randomBytes(20).toString("hex");
-    await db.ref(`userSessions/${sessionToken}`).set({
-       uid,
-       createdAt: Date.now()
+    // user token dài hạn
+    const userToken = genToken(32);
+    await db.ref(`userAuthTokens/${userToken}`).set({
+      uid,
+      createdAt: Date.now(),
+      revoked: false
     });
 
-    res.json({
+    return res.json({
       ok: true,
       uid,
-      token: sessionToken,
+      token: userToken, // client đang lấy data.token để lưu SecureStore
       rulesAccepted: !!userData.rulesAccepted,
       coins: userData.coins || 0
     });
   } catch {
-    res.status(401).json({ ok: false, error: "Sai email hoặc mật khẩu!" });
+    return res.status(401).json({ ok: false, error: "Sai email hoặc mật khẩu!" });
   }
 });
+
+/* =====================================================
+   ISSUE SESSION FROM USER TOKEN
+===================================================== */
+app.post("/auth/issue-session", async (req, res) => {
+  try {
+    const userToken = req.headers["x-user-token"];
+    if (!userToken) return res.status(401).json({ ok: false });
+
+    const authSnap = await db.ref(`userAuthTokens/${userToken}`).get();
+    if (!authSnap.exists()) return res.status(401).json({ ok: false });
+
+    const authData = authSnap.val();
+    if (authData.revoked) return res.status(401).json({ ok: false });
+
+    const sessionToken = genToken(20);
+    const now = Date.now();
+
+    await db.ref(`userSessions/${sessionToken}`).set({
+      uid: authData.uid,
+      userToken,
+      createdAt: now,
+      expiresAt: now + SESSION_TTL_MS
+    });
+
+    return res.json({
+      ok: true,
+      sessionToken,
+      expiresAt: now + SESSION_TTL_MS
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false });
+  }
+});
+
 
 const getTokenLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 phút
@@ -275,7 +322,8 @@ app.post("/get-messages", authenticate, async (req, res) => {
    2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
 app.post("/get-token", authenticate, getTokenLimiter, async (req, res) => {
-  const { uid, linkId } = req.body;
+  const { linkId } = req.body;
+  const uid = req.user.uid;
   const today = new Date().toISOString().slice(0,10);
   const linkRef = db.ref(`users/${uid}/links/${linkId}`);
   const snap = await linkRef.get();
