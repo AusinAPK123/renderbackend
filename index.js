@@ -26,7 +26,7 @@ const db = admin.database();
 ===================================================== */
 const authenticate = async (req, res, next) => {
   try {
-    const { sessionToken } = req.body;
+    const { sessionToken } = req.headers["x-sessionToken"];
 
     if (!sessionToken) {
       return res.status(401).json({ ok: false });
@@ -38,11 +38,9 @@ const authenticate = async (req, res, next) => {
       return res.status(401).json({ ok: false });
     }
 
-    const { uid } = snap.val();
-
-    req.user = { uid };
-
+    req.user = { uid: snap.val().uid };
     next();
+     
   } catch (err) {
     res.status(500).json({ ok: false });
   }
