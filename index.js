@@ -237,6 +237,40 @@ app.post("/upmessage", authenticate, msgrateLimit, async (req, res) => {
   }
 });
 
+app.post("/get-messages", authenticate, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const { roomId, limit = 100 } = req.body;
+
+    if (!roomId) return res.json({ ok: false, error: "missing roomId" });
+
+    const parts = roomId.split("_");
+    if (parts.length !== 2) return res.json({ ok: false, error: "invalid roomId" });
+    if (!parts.includes(uid)) return res.json({ ok: false, error: "not allowed" });
+
+    const roomSnap = await db.ref(`rooms/${roomId}`).get();
+    if (!roomSnap.exists()) return res.json({ ok: true, messages: [] });
+
+    const msgsSnap = await db.ref(`messages/${roomId}`).limitToLast(Number(limit) || 100).get();
+    const raw = msgsSnap.val() || {};
+
+    const messages = Object.entries(raw)
+      .map(([id, m]) => ({
+        id,
+        sender: m.sender || "",
+        text: m.message || "",
+        time: m.time || 0,
+      }))
+      .sort((a, b) => a.time - b.time);
+
+    return res.json({ ok: true, messages });
+  } catch (err) {
+    console.error("GET_MESSAGES ERROR:", err);
+    return res.status(500).json({ ok: false, error: "server error" });
+  }
+});
+
+
 /* =====================================================
    2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
