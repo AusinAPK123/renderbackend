@@ -391,7 +391,7 @@ app.post("/get-user-data", authenticate, async (req, res) => {
       ok: true,
       name: userData.name,
       coins: userData.coins || 0,
-      xp: userData.xp || 0,
+      axp: userData.axp || 0,
       rulesAccepted: !!userData.rulesAccepted,
       links: userData.links || {}
     });
@@ -486,8 +486,7 @@ app.post("/use-token", async (req, res) => {
     await db.ref(`users/${uid}/coins`)
       .transaction(c => (c || 0) + 30);
 
-    await db.ref(`users/${uid}/xp`)
-      .transaction(x => (x || 0) + 5);
+    await db.ref(`users/${uid}/axp`).transaction(v => (v || 0) + 5);
 
     return res.json({
       ok: true,
