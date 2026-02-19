@@ -26,7 +26,7 @@ const db = admin.database();
 ===================================================== */
 const authenticate = async (req, res, next) => {
   try {
-    const { sessionToken } = req.headers["x-sessionToken"];
+    const sessionToken = req.headers["x-sessionToken"];
 
     if (!sessionToken) {
       return res.status(401).json({ ok: false });
