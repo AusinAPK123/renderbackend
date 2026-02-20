@@ -199,6 +199,106 @@ function msgrateLimit(req, res, next) {
 }
 
 /* =====================================================
+   DAILY CHECK-IN
+===================================================== */
+const CHECKIN_REWARDS = [5, 5, 5, 10, 10, 15, 20];
+
+// Day key theo UTC+7 để ổn định theo giờ VN
+function getTodayKeyVN() {
+  const now = new Date();
+  const vn = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+  return vn.toISOString().slice(0, 10);
+}
+
+function getPrevDayKeyVN(todayKey) {
+  const d = new Date(`${todayKey}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+app.get("/checkin-status", authenticate, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const today = getTodayKeyVN();
+
+    const snap = await db.ref(`users/${uid}/checkin`).get();
+    const info = snap.val() || {};
+    const streak = Number(info.streak || 0);
+    const claimedToday = info.lastDate === today;
+    const nextDayIndex = claimedToday ? streak % 7 : streak % 7;
+    const reward = CHECKIN_REWARDS[nextDayIndex];
+
+    return res.json({
+      ok: true,
+      uid,
+      claimedToday,
+      canClaim: !claimedToday,
+      streak,
+      reward,
+    });
+  } catch (err) {
+    console.error("CHECKIN_STATUS ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+app.post("/checkin-claim", authenticate, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const today = getTodayKeyVN();
+    const prevDay = getPrevDayKeyVN(today);
+
+    const userRef = db.ref(`users/${uid}`);
+
+    let result = { ok: false, error: "Claim failed" };
+
+    const tx = await userRef.transaction((user) => {
+      if (!user || typeof user !== "object") {
+        result = { ok: false, error: "User not found" };
+        return user;
+      }
+
+      const checkin = user.checkin || {};
+      if (checkin.lastDate === today) {
+        result = { ok: false, error: "Ban da diem danh hom nay" };
+        return; // abort
+      }
+
+      const oldStreak = Number(checkin.streak || 0);
+      const newStreak = checkin.lastDate === prevDay ? oldStreak + 1 : 1;
+      const reward = CHECKIN_REWARDS[(newStreak - 1) % 7];
+
+      user.coins = Number(user.coins || 0) + reward;
+      user.checkin = {
+        lastDate: today,
+        streak: newStreak,
+        updatedAt: Date.now(),
+      };
+
+      result = {
+        ok: true,
+        added: reward,
+        streak: newStreak,
+        nextReward: CHECKIN_REWARDS[newStreak % 7],
+        coins: Number(user.coins || 0),
+      };
+
+      return user;
+    });
+
+    if (!tx.committed) {
+      return res.status(400).json(result.ok ? { ok: false, error: "Claim failed" } : result);
+    }
+
+    return res.json(result);
+  } catch (err) {
+    console.error("CHECKIN_CLAIM ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+
+/* =====================================================
    ADMIN AUTH (tạm thời bằng user token)
 ===================================================== */
 async function authenticateAdmin(req, res, next) {
