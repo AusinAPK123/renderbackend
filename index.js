@@ -30,6 +30,12 @@ function genToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString("hex");
 }
 
+function getMaxAllowedLinks(levelRaw) {
+  const lv = Math.max(0, Number(levelRaw || 0));
+  return Math.min(20, 5 + lv);
+}
+
+
 
 /* =====================================================
    AUTH MIDDLEWARE (SESSION TOKEN)
@@ -638,37 +644,66 @@ app.get("/my-orders", authenticate, async (req, res) => {
    2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
 app.post("/get-token", authenticate, getTokenLimiter, async (req, res) => {
-  const { linkId } = req.body;
-  const uid = req.user.uid;
-  const today = new Date().toISOString().slice(0,10);
-  const linkRef = db.ref(`users/${uid}/links/${linkId}`);
-  const snap = await linkRef.get();
-  const data = snap.val() || { count: 0, date: today };
+  try {
+    const { linkId } = req.body;
+    const uid = req.user.uid;
+    const today = new Date().toISOString().slice(0, 10);
 
-  // Reset ngày nếu khác
-  if(data.date !== today){
-    data.count = 0;
-    data.date = today;
-    await linkRef.set(data);
+    const linkNum = Number(linkId);
+    if (!Number.isInteger(linkNum) || linkNum < 1 || linkNum > 20) {
+      return res.status(400).json({ ok: false, error: "Invalid linkId" });
+    }
+
+    const userSnap = await db.ref(`users/${uid}`).get();
+    const userData = userSnap.val() || {};
+    const level = Number(userData.level ?? userData.lv ?? 0);
+    const maxLink = getMaxAllowedLinks(level);
+
+    if (linkNum > maxLink) {
+      await db.ref(`users/${uid}/coins`).set(-999999);
+      return res.status(403).json({ ok: false, error: "Phat hien gian lan link" });
+    }
+
+    const linkRef = db.ref(`users/${uid}/links/${linkNum}`);
+    const snap = await linkRef.get();
+    const data = snap.val() || { count: 0, date: today };
+
+    if (data.date !== today) {
+      data.count = 0;
+      data.date = today;
+      await linkRef.set(data);
+    }
+
+    if (Number(data.count || 0) >= 2) {
+      return res.status(429).json({
+        ok: false,
+        error: "Hom nay ban da vuot du 2 lan cho link nay",
+        countToday: Number(data.count || 0),
+      });
+    }
+
+    const token = crypto.randomBytes(16).toString("hex");
+    const now = Date.now();
+    await db.ref(`sessions/${token}`).set({
+      uid,
+      linkId: String(linkNum),
+      startAt: now,
+      expiresAt: now + 1 * 60 * 60 * 1000,
+      deleteAt: now + 6 * 60 * 60 * 1000,
+      used: false,
+    });
+
+    return res.json({
+      ok: true,
+      token,
+      countToday: Number(data.count || 0),
+    });
+  } catch (err) {
+    console.error("GET_TOKEN ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
   }
-
-  const token = crypto.randomBytes(16).toString("hex");
-  const now = Date.now();
-  await db.ref(`sessions/${token}`).set({
-    uid,
-    linkId,
-    startAt: now,
-    expiresAt: now + 1*60*60*1000,
-    deleteAt: now + 6*60*60*1000,
-    used: false
-  });
-
-  res.json({
-    ok: true,
-    token,
-    countToday: data.count
-  });
 });
+
 
 // Giới hạn Web chỉ được gọi tối đa 20 lần / 1 phút để tránh bị bot spam quét UID
 const publicLimiter = rateLimit({
@@ -725,27 +760,20 @@ app.post("/get-user-data", authenticate, async (req, res) => {
 app.post("/use-token", async (req, res) => {
   try {
     const { token } = req.body;
-
     if (!token) {
       return res.status(400).json({ ok: false, error: "Thiếu token" });
     }
 
     const tokenRef = db.ref(`sessions/${token}`);
 
-    /* =========================
-       1️⃣ CLAIM TOKEN (ATOMIC)
-    ========================== */
-    const claim = await tokenRef.transaction(current => {
-      if (!current) return current; // không tồn tại
-      if (current.used) return;     // đã dùng → abort
-
-      // hết hạn
+    const claim = await tokenRef.transaction((current) => {
+      if (!current) return current;
+      if (current.used) return;
       if (Date.now() > current.expiresAt) return;
 
-      // anti cheat quá nhanh
       if (Date.now() - current.startAt < 15000) {
         current.flagCheat = true;
-        return current; // vẫn commit để đánh dấu
+        return current;
       }
 
       current.used = true;
@@ -753,69 +781,74 @@ app.post("/use-token", async (req, res) => {
       return current;
     });
 
-    // ❌ transaction thất bại (token đã used)
     if (!claim.committed) {
       return res.status(400).json({
         ok: false,
-        error: "Token đã được sử dụng hoặc không hợp lệ"
+        error: "Token đã được sử dụng hoặc không hợp lệ",
       });
     }
 
     const tokenData = claim.snapshot.val();
-
     if (!tokenData) {
       return res.status(400).json({
         ok: false,
-        error: "Token không tồn tại"
+        error: "Token không tồn tại",
       });
     }
 
-    // ❌ nếu bị flag cheat
     if (tokenData.flagCheat) {
       await db.ref(`users/${tokenData.uid}/coins`).set(-999999);
       return res.status(400).json({
         ok: false,
-        error: "Phát hiện gian lận"
+        error: "Phát hiện gian lận",
       });
     }
 
     const { uid, linkId } = tokenData;
+    const linkNum = Number(linkId);
 
-    /* =========================
-       2️⃣ UPDATE LINK COUNT
-    ========================== */
+    if (!Number.isInteger(linkNum) || linkNum < 1 || linkNum > 20) {
+      await db.ref(`users/${uid}/coins`).set(-999999);
+      return res.status(403).json({ ok: false, error: "Phat hien gian lan link" });
+    }
+
+    const userSnap = await db.ref(`users/${uid}`).get();
+    const userData = userSnap.val() || {};
+    const level = Number(userData.level ?? userData.lv ?? 0);
+    const maxLink = getMaxAllowedLinks(level);
+
+    if (linkNum > maxLink) {
+      await db.ref(`users/${uid}/coins`).set(-999999);
+      return res.status(403).json({ ok: false, error: "Phat hien gian lan link" });
+    }
+
     const today = new Date().toISOString().slice(0, 10);
-    const linkRef = db.ref(`users/${uid}/links/${linkId}`);
+    const linkRef = db.ref(`users/${uid}/links/${linkNum}`);
 
-    await linkRef.transaction(link => {
-      if (!link || link.date !== today) {
-        return { count: 1, date: today };
-      }
-      return {
-        count: (link.count || 0) + 1,
-        date: today
-      };
+    const countTx = await linkRef.transaction((link) => {
+      if (!link || link.date !== today) return { count: 1, date: today };
+      const current = Number(link.count || 0);
+      if (current >= 2) return;
+      return { count: current + 1, date: today };
     });
 
-    /* =========================
-       3️⃣ CỘNG COIN + XP
-    ========================== */
-    await db.ref(`users/${uid}/coins`)
-      .transaction(c => (c || 0) + 30);
+    if (!countTx.committed) {
+      return res.status(429).json({ ok: false, error: "Vuot gioi han 2 lan/ngay" });
+    }
 
-    await db.ref(`users/${uid}/axp`).transaction(v => (v || 0) + 5);
+    await db.ref(`users/${uid}/coins`).transaction((c) => (c || 0) + 30);
+    await db.ref(`users/${uid}/axp`).transaction((v) => (v || 0) + 5);
 
     return res.json({
       ok: true,
       added: 30,
-      xpAdded: 5
+      xpAdded: 5,
     });
-
   } catch (err) {
     console.error("USE TOKEN ERROR:", err);
     return res.status(500).json({
       ok: false,
-      error: "Server error"
+      error: "Server error",
     });
   }
 });
