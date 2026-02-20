@@ -924,6 +924,7 @@ app.post("/get-user-data", authenticate, async (req, res) => {
       ok: true,
       uid,
       name: userData.name,
+      email: userData.email || "",
       coins: userData.coins || 0,
       axp: userData.axp || 0,
       rulesAccepted: !!userData.rulesAccepted,
