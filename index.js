@@ -303,6 +303,147 @@ app.post("/checkin-claim", authenticate, async (req, res) => {
   }
 });
 
+/* =====================================================
+   GAME CONFIG (generic)
+===================================================== */
+const GAME_META = {
+  BlockL: {
+    modeRequired: false,          // leaderboard/BlockL
+    defaultMode: "ranked",        // chỉ dùng cho membership/register
+    defaultOrder: "desc",
+    requireJoinForScore: true,
+    entryFees: { ranked: 90 },    // casual = 0 (không đăng ký)
+  },
+  minesweeper: {
+    modeRequired: true,           // leaderboard/minesweeper/{mode}
+    defaultMode: "easy",
+    defaultOrder: "asc",
+    requireJoinForScore: true,
+    entryFees: { easy: 90, hard: 90 },
+  },
+};
+
+function getGameMeta(gameName) {
+  return GAME_META[String(gameName || "").trim()];
+}
+
+function normalizeMode(gameName, rawMode) {
+  const meta = getGameMeta(gameName);
+  if (!meta) return null;
+
+  const mode = String(rawMode || meta.defaultMode || "").trim().toLowerCase();
+  if (!mode) return null;
+
+  if (meta.modeRequired && !mode) return null;
+  return mode;
+}
+
+function getLeaderboardBasePath(gameName, mode) {
+  const meta = getGameMeta(gameName);
+  if (!meta) return null;
+  if (meta.modeRequired) return `leaderboard/${gameName}/${mode}`;
+  return `leaderboard/${gameName}`;
+}
+
+function getEntryFee(gameName, mode) {
+  const meta = getGameMeta(gameName);
+  if (!meta) return 0;
+  return Number(meta.entryFees?.[mode] || 0);
+}
+
+/* =====================================================
+   GAME REGISTER / GAME STATE
+===================================================== */
+app.post("/game-register", authenticate, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const gameName = String(req.body?.gameName || "").trim();
+    const meta = getGameMeta(gameName);
+    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported game" });
+
+    const mode = normalizeMode(gameName, req.body?.mode);
+    if (!mode) return res.status(400).json({ ok: false, error: "Invalid mode" });
+
+    const fee = getEntryFee(gameName, mode);
+    if (fee <= 0) {
+      return res.status(400).json({ ok: false, error: "Mode nay khong can dang ky" });
+    }
+
+    const memberRef = db.ref(`gameMembers/${gameName}/${mode}/${uid}`);
+    const memberSnap = await memberRef.get();
+    if (memberSnap.exists()) {
+      return res.json({ ok: true, joined: true, alreadyJoined: true, fee: 0 });
+    }
+
+    const coinRef = db.ref(`users/${uid}/coins`);
+    const spend = await coinRef.transaction((c) => {
+      const coin = Number(c || 0);
+      if (!Number.isFinite(coin)) return;
+      if (coin < fee) return;
+      return coin - fee;
+    });
+
+    if (!spend.committed) {
+      const latestCoin = Number((await coinRef.get()).val() || 0);
+      return res.status(400).json({ ok: false, error: `Khong du coin (${latestCoin})` });
+    }
+
+    await memberRef.set({
+      joinedAt: Date.now(),
+      feePaid: fee,
+    });
+
+    return res.json({
+      ok: true,
+      joined: true,
+      fee,
+      coinsLeft: Number(spend.snapshot?.val() || 0),
+    });
+  } catch (err) {
+    console.error("GAME_REGISTER ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+app.get("/game-state", authenticate, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const gameName = String(req.query?.gameName || "").trim();
+    const meta = getGameMeta(gameName);
+    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported game" });
+
+    const mode = normalizeMode(gameName, req.query?.mode);
+    if (!mode) return res.status(400).json({ ok: false, error: "Invalid mode" });
+
+    const memberSnap = await db.ref(`gameMembers/${gameName}/${mode}/${uid}`).get();
+    const joined = memberSnap.exists();
+    const joinedAt = joined ? Number(memberSnap.val()?.joinedAt || 0) : 0;
+
+    const lbBase = getLeaderboardBasePath(gameName, mode);
+    const lbSnap = await db.ref(lbBase).get();
+    const raw = lbSnap.val() || {};
+
+    const rows = Object.entries(raw)
+      .map(([playerUid, v]) => ({
+        uid: playerUid,
+        name: v?.name || "Unknown",
+        bestscore: Number(v?.bestscore || 0),
+        updatedAt: Number(v?.updatedAt || 0),
+      }))
+      .sort((a, b) => {
+        const order = meta.defaultOrder || "desc";
+        return order === "asc" ? a.bestscore - b.bestscore : b.bestscore - a.bestscore;
+      })
+      .slice(0, 100);
+
+    return res.json({ ok: true, gameName, mode, joined, joinedAt, rows });
+  } catch (err) {
+    console.error("GAME_STATE ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+
 
 /* =====================================================
    ADMIN AUTH (tạm thời bằng user token)
@@ -858,53 +999,75 @@ app.post("/use-token", async (req, res) => {
 ===================================================== */
 app.post("/submit-score", authenticate, async (req, res) => {
   try {
-    // Thêm 'order' vào destructuring (mặc định là 'desc' nếu không gửi)
     const uid = req.user.uid;
-    const { score, gameName, mode, order = 'desc' } = req.body;
-    
+    const { score, gameName, mode, order } = req.body || {};
+
     if (!uid || score == null || !gameName) {
       return res.status(400).json({ ok: false, error: "Thiếu dữ liệu" });
     }
 
-    let scorePath = `leaderboard/${gameName}`;
-    if (mode) scorePath += `/${mode}`;
-    scorePath += `/${uid}`;
+    const meta = getGameMeta(gameName);
+    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported game" });
 
+    const m = normalizeMode(gameName, mode);
+    if (!m) return res.status(400).json({ ok: false, error: "Invalid mode" });
+
+    if (meta.requireJoinForScore) {
+      const memberSnap = await db.ref(`gameMembers/${gameName}/${m}/${uid}`).get();
+      if (!memberSnap.exists()) {
+        return res.status(403).json({ ok: false, error: "Chua dang ky mode BXH" });
+      }
+    }
+
+    const newScore = Number(score);
+    if (!Number.isFinite(newScore)) {
+      return res.status(400).json({ ok: false, error: "Score không hợp lệ" });
+    }
+
+    const userSnap = await db.ref(`users/${uid}`).get();
+    const userName = userSnap.val()?.name || "Unknown";
+
+    const scorePath = `${getLeaderboardBasePath(gameName, m)}/${uid}`;
     const scoreRef = db.ref(scorePath);
     const snap = await scoreRef.get();
 
+    const compareOrder = String(order || meta.defaultOrder || "desc").toLowerCase();
+
     if (!snap.exists()) {
-      return res.json({ ok: false, error: "Chưa tham gia minigame" });
+      await scoreRef.set({
+        bestscore: newScore,
+        updatedAt: Date.now(),
+        name: userName,
+      });
+      return res.json({ ok: true, newRecord: true, firstTime: true });
     }
 
-    const current = snap.val();
-    const bestscore = Number(current.bestscore) || (order === 'asc' ? Infinity : 0);
-    const newScore = Number(score);
+    const current = snap.val() || {};
+    const prev = Number(current.bestscore);
+    const bestscore = Number.isFinite(prev)
+      ? prev
+      : (compareOrder === "asc" ? Infinity : 0);
 
-    // 🔥 LOGIC SO SÁNH LINH HOẠT
-    let isNewRecord = false;
-    if (order === 'asc') {
-      // Game tính thời gian: score mới phải NHỎ HƠN score cũ
-      if (newScore < bestscore) isNewRecord = true;
-    } else {
-      // Game tính điểm: score mới phải LỚN HƠN score cũ
-      if (newScore > bestscore) isNewRecord = true;
-    }
+    const isNewRecord = compareOrder === "asc"
+      ? newScore < bestscore
+      : newScore > bestscore;
 
     if (isNewRecord) {
       await scoreRef.update({
         bestscore: newScore,
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
+        name: userName,
       });
       return res.json({ ok: true, newRecord: true });
     }
 
-    res.json({ ok: true, newRecord: false });
+    return res.json({ ok: true, newRecord: false });
   } catch (e) {
     console.error("SUBMIT SCORE ERROR:", e);
-    res.status(500).json({ ok: false, error: "Lỗi lưu điểm" });
+    return res.status(500).json({ ok: false, error: "Lỗi lưu điểm" });
   }
 });
+
 
 
 /* =====================================================
