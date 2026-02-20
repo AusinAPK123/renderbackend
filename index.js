@@ -383,35 +383,61 @@ app.post("/game-register", authenticate, async (req, res) => {
     if (!mode) return res.status(400).json({ ok: false, error: "Invalid mode" });
 
     const fee = getEntryFee(gameName, mode);
-    if (fee <= 0) return res.status(400).json({ ok: false, error: "Mode nay khong can dang ky" });
+    if (fee <= 0) {
+      return res.status(400).json({ ok: false, error: "Mode nay khong can dang ky", uid });
+    }
 
     const memberRef = db.ref(`gameMembers/${gameName}/${mode}/${uid}`);
     const memberSnap = await memberRef.get();
-    if (memberSnap.exists()) return res.json({ ok: true, joined: true, alreadyJoined: true, fee: 0 });
+    if (memberSnap.exists()) {
+      return res.json({ ok: true, joined: true, alreadyJoined: true, fee: 0, uid });
+    }
 
+    // 1) Read coin trước (giống create-order)
     const coinRef = db.ref(`users/${uid}/coins`);
-    const spend = await coinRef.transaction((c) => {
-      const coin = Number(c || 0);
-      if (!Number.isFinite(coin)) return; // abort
-      if (coin < fee) return;             // abort
+    const beforeSnap = await coinRef.get();
+    const beforeCoin = Number(beforeSnap.val());
+
+    if (!Number.isFinite(beforeCoin)) {
+      return res.status(400).json({ ok: false, error: "Coin data invalid", uid });
+    }
+
+    if (beforeCoin < fee) {
+      return res.status(400).json({
+        ok: false,
+        error: `Khong du coin (${beforeCoin})`,
+        uid,
+      });
+    }
+
+    // 2) Atomic spend
+    const spend = await coinRef.transaction((current) => {
+      const coin = Number(current ?? beforeCoin);
+      if (!Number.isFinite(coin)) return;
+      if (coin < fee) return;
       return coin - fee;
     });
 
     if (!spend.committed) {
-      const dbCoin = Number(spend.snapshot?.val());
-      if (!Number.isFinite(dbCoin)) {
-        return res.status(400).json({ ok: false, error: "Coin data invalid" });
-      }
-      return res.status(400).json({ ok: false, error: `Khong du coin (${dbCoin})` });
+      const latestCoin = Number((await coinRef.get()).val() ?? 0);
+      return res.status(409).json({
+        ok: false,
+        uid,
+        error: `So du thay doi, thu lai (${Number.isFinite(latestCoin) ? latestCoin : 0})`,
+      });
     }
 
-    await memberRef.set({ joinedAt: Date.now(), feePaid: fee });
+    await memberRef.set({
+      joinedAt: Date.now(),
+      feePaid: fee,
+    });
 
     return res.json({
       ok: true,
+      uid,
       joined: true,
       fee,
-      coinsLeft: Number(spend.snapshot?.val() || 0),
+      coinsLeft: Number(spend.snapshot?.val() ?? 0),
     });
   } catch (err) {
     console.error("GAME_REGISTER ERROR:", err);
