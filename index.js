@@ -495,6 +495,10 @@ async function authenticateAdminStrict(req, res, next) {
     const adminToken = req.headers["x-admin-token"];
     const adminKey = req.headers["x-admin-key"];
 
+    console.log("[ADMIN DEBUG] env:", JSON.stringify(ADMIN_KEY), "len:", ADMIN_KEY.length);
+    console.log("[ADMIN DEBUG] req:", JSON.stringify(adminKey || ""), "len:", (adminKey || "").length);
+    console.log("[ADMIN DEBUG] eq:", adminKey === ADMIN_KEY, "eqTrim:", String(adminKey || "").trim() === String(ADMIN_KEY).trim());
+
     if (!adminToken || !adminKey) {
       return res.status(401).json({ ok: false, error: "Missing admin auth" });
     }
