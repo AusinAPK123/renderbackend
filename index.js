@@ -957,50 +957,78 @@ app.get("/check-rules", async (req, res) => {
 async function clean() {
   const today = new Date().toISOString().slice(0, 10);
   const now = Date.now();
-
   const updates = {};
 
-  /* =========================
-     1. CLEAN LINKS
-  ========================== */
+  // 1) CLEAN LINKS
   const usersSnap = await db.ref("users").get();
   const users = usersSnap.val() || {};
-
   for (const uid in users) {
-    const links = users[uid].links;
-    if (!links) continue;
-
+    const links = users[uid].links || {};
     for (const linkId in links) {
-      const link = links[linkId];
+      const link = links[linkId] || {};
+      const count = Number(link.count || 0);
+      const date = typeof link.date === "string" ? link.date : today;
 
-      if (link.date && link.date !== today) {
+      if (link.date !== today) {
         updates[`users/${uid}/links/${linkId}/count`] = 0;
         updates[`users/${uid}/links/${linkId}/date`] = today;
+      } else if (!Number.isFinite(count) || count < 0) {
+        updates[`users/${uid}/links/${linkId}/count`] = 0;
+      } else if (date !== link.date) {
+        updates[`users/${uid}/links/${linkId}/date`] = date;
       }
     }
   }
 
-  /* =========================
-     2. CLEAN TOKENS
-  ========================== */
+  // 2) CLEAN EARN TOKENS (sessions)
   const sessionsSnap = await db.ref("sessions").get();
   const sessions = sessionsSnap.val() || {};
-
   for (const tokenId in sessions) {
-    const token = sessions[tokenId];
-    if (token.deleteAt && token.deleteAt < now) {
+    const s = sessions[tokenId] || {};
+    const usedTooOld = s.used && s.usedAt && (now - s.usedAt > 2 * 60 * 60 * 1000);
+    const expiredDelete = s.deleteAt && s.deleteAt < now;
+    const malformed = !s.uid || !s.linkId || !s.expiresAt;
+    if (expiredDelete || usedTooOld || malformed) {
       updates[`sessions/${tokenId}`] = null;
     }
   }
-  
-  /* =========================
-     APPLY UPDATES (1 REQUEST)
-  ========================== */
+
+  // 3) CLEAN LOGIN SESSIONS (userSessions)
+  const userSessionsSnap = await db.ref("userSessions").get();
+  const userSessions = userSessionsSnap.val() || {};
+  for (const st in userSessions) {
+    const s = userSessions[st] || {};
+    if (!s.uid || !s.expiresAt || s.expiresAt < now) {
+      updates[`userSessions/${st}`] = null;
+    }
+  }
+
+  // 4) CLEAN ORDER INDEX ORPHANS
+  const ordersSnap = await db.ref("orders").get();
+  const orders = ordersSnap.val() || {};
+
+  const byUserSnap = await db.ref("ordersByUser").get();
+  const byUser = byUserSnap.val() || {};
+  for (const uid in byUser) {
+    for (const orderId in (byUser[uid] || {})) {
+      if (!orders[orderId]) updates[`ordersByUser/${uid}/${orderId}`] = null;
+    }
+  }
+
+  const byStatusSnap = await db.ref("ordersByStatus").get();
+  const byStatus = byStatusSnap.val() || {};
+  for (const status in byStatus) {
+    for (const orderId in (byStatus[status] || {})) {
+      if (!orders[orderId]) updates[`ordersByStatus/${status}/${orderId}`] = null;
+    }
+  }
+
   if (Object.keys(updates).length > 0) {
     await db.ref().update(updates);
   }
-  console.log("🧹 Clean finished at", new Date().toISOString());
+  console.log("Clean finished at", new Date().toISOString(), "updates:", Object.keys(updates).length);
 }
+
 
 /* =====================================================
    NOTIFICATIONS ROUTE
