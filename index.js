@@ -150,7 +150,7 @@ const getTokenLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 phút
   max: 3, // tối đa 3 lần
   message: { ok: false, error: "Quá nhiều yêu cầu, thử lại sau" },
-  keyGenerator: (req) => req.body.uid || req.ip // Ưu tiên UID
+  keyGenerator: (req) => req.user?.uid || req.ip
 });
 
 app.post("/get-room", authenticate, async (req, res) => {
@@ -316,6 +316,68 @@ app.post("/get-messages", authenticate, async (req, res) => {
     return res.status(500).json({ ok: false, error: "server error" });
   }
 });
+
+app.post("/create-order", authenticate, async (req, res) => {
+  try {
+    const uid = req.user.uid; // KHONG lay uid tu body
+    const {
+      type, name, price = 0, content = "",
+      bankAccount = "", bankName = "", bankProvider = ""
+    } = req.body || {};
+
+    if (!type || !name) return res.status(400).json({ ok: false, error: "Missing fields" });
+    const p = Number(price);
+    if (!Number.isFinite(p) || p <= 0) return res.status(400).json({ ok: false, error: "Invalid price" });
+
+    const coinRef = db.ref(`users/${uid}/coins`);
+    const spend = await coinRef.transaction((c) => {
+      const coin = Number(c || 0);
+      if (coin < p) return; // abort
+      return coin - p;
+    });
+    if (!spend.committed) return res.status(400).json({ ok: false, error: "Không đủ coin" });
+
+    const orderRef = db.ref("orders").push();
+    const orderId = orderRef.key;
+    const order = {
+      uid, type, name, price: p, status: "pending", content,
+      date: Date.now(),
+      bankAccount, bankName, bankProvider
+    };
+
+    const updates = {};
+    updates[`orders/${orderId}`] = order;
+    updates[`ordersByUser/${uid}/${orderId}`] = true;
+    updates[`ordersByStatus/pending/${orderId}`] = true;
+    await db.ref().update(updates);
+
+    return res.json({ ok: true, orderId, order });
+  } catch (err) {
+    console.error("CREATE_ORDER ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+app.get("/my-orders", authenticate, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const idxSnap = await db.ref(`ordersByUser/${uid}`).get();
+    const idx = idxSnap.val() || {};
+    const ids = Object.keys(idx);
+
+    const jobs = ids.map(async (id) => {
+      const s = await db.ref(`orders/${id}`).get();
+      return s.exists() ? { id, ...s.val() } : null;
+    });
+    const rows = (await Promise.all(jobs)).filter(Boolean).sort((a, b) => b.date - a.date);
+
+    return res.json({ ok: true, orders: rows });
+  } catch (err) {
+    console.error("MY_ORDERS ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
 
 
 /* =====================================================
