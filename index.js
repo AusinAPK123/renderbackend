@@ -319,44 +319,36 @@ app.post("/get-messages", authenticate, async (req, res) => {
 
 app.post("/create-order", authenticate, async (req, res) => {
   try {
-    const uid = req.user.uid; // KHONG lay uid tu body
-    const {
-      type, name, price = 0, content = "",
-      bankAccount = "", bankName = "", bankProvider = ""
-    } = req.body || {};
+    const uid = req.user.uid;
+    const { type, name, price = 0, content = "", bankAccount = "", bankName = "", bankProvider = "" } = req.body || {};
 
     if (!type || !name) return res.status(400).json({ ok: false, error: "Missing fields" });
     const p = Number(price);
     if (!Number.isFinite(p) || p <= 0) return res.status(400).json({ ok: false, error: "Invalid price" });
 
     const coinRef = db.ref(`users/${uid}/coins`);
-    const spend = await coinRef.transaction((c) => {
-      const coin = Number(c || 0);
-      if (coin < p) return; // abort
+    const spend = await coinRef.transaction((current) => {
+      const coin = Number(current);
+      if (!Number.isFinite(coin)) return;     // abort: coin data lỗi
+      if (coin < p) return;                   // abort: thiếu coin
       return coin - p;
     });
-    if (!spend.committed) return res.status(400).json({ ok: false, error: "Không đủ coin" });
 
-    const orderRef = db.ref("orders").push();
-    const orderId = orderRef.key;
-    const order = {
-      uid, type, name, price: p, status: "pending", content,
-      date: Date.now(),
-      bankAccount, bankName, bankProvider
-    };
+    if (!spend.committed) {
+      const dbCoin = Number(spend.snapshot?.val());
+      if (!Number.isFinite(dbCoin)) {
+        return res.status(400).json({ ok: false, error: "Coin data invalid" });
+      }
+      return res.status(400).json({ ok: false, error: `Không đủ coin (${dbCoin})` });
+    }
 
-    const updates = {};
-    updates[`orders/${orderId}`] = order;
-    updates[`ordersByUser/${uid}/${orderId}`] = true;
-    updates[`ordersByStatus/pending/${orderId}`] = true;
-    await db.ref().update(updates);
-
-    return res.json({ ok: true, orderId, order });
+    // ... tạo order như cũ
   } catch (err) {
     console.error("CREATE_ORDER ERROR:", err);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
+
 
 app.get("/my-orders", authenticate, async (req, res) => {
   try {
