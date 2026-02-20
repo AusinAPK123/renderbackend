@@ -198,6 +198,99 @@ function msgrateLimit(req, res, next) {
   next();
 }
 
+/* =====================================================
+   ADMIN AUTH (tạm thời bằng user token)
+===================================================== */
+async function authenticateAdmin(req, res, next) {
+  try {
+    const adminToken = req.headers["x-admin-token"];
+    if (!adminToken) return res.status(401).json({ ok: false, error: "Missing admin token" });
+
+    // Token này là userAuthToken đã có từ /login
+    const tokenSnap = await db.ref(`userAuthTokens/${adminToken}`).get();
+    if (!tokenSnap.exists()) return res.status(401).json({ ok: false, error: "Invalid admin token" });
+
+    const tokenData = tokenSnap.val();
+    if (tokenData.revoked) return res.status(401).json({ ok: false, error: "Token revoked" });
+
+    const adminUid = tokenData.uid;
+    const userSnap = await db.ref(`users/${adminUid}`).get();
+    const userData = userSnap.val() || {};
+
+    // Check quyền admin (isAdmin bắt buộc)
+    if (!userData.isAdmin) {
+      return res.status(403).json({ ok: false, error: "Not admin" });
+    }
+
+    req.admin = { uid: adminUid, name: userData.name || "" };
+    next();
+  } catch (err) {
+    console.error("ADMIN AUTH ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+}
+
+/* =====================================================
+   ADMIN UPDATE ORDER (approve/reject)
+   body: { orderId, action, content }
+   action: "approve" | "reject"
+===================================================== */
+app.post("/admin/update-order", authenticateAdmin, async (req, res) => {
+  try {
+    const { orderId, action, content } = req.body || {};
+
+    if (!orderId || !action) {
+      return res.status(400).json({ ok: false, error: "Missing fields" });
+    }
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({ ok: false, error: "Invalid action" });
+    }
+    if (!content || !String(content).trim()) {
+      return res.status(400).json({ ok: false, error: "Content is required" });
+    }
+
+    const orderRef = db.ref(`orders/${orderId}`);
+    const tx = await orderRef.transaction((order) => {
+      if (!order) return; // abort
+      if (order.status !== "pending") return; // chỉ xử lý đơn pending
+
+      order.status = action === "approve" ? "approved" : "rejected";
+      order.content = String(content).trim();
+      order.updatedAt = Date.now();
+      order.reviewedBy = req.admin.uid;
+      order.reviewedByName = req.admin.name || "";
+      return order;
+    });
+
+    if (!tx.committed) {
+      return res.status(409).json({ ok: false, error: "Order already processed or not found" });
+    }
+
+    const order = tx.snapshot.val();
+    const updates = {};
+
+    // cập nhật index status
+    updates[`ordersByStatus/pending/${orderId}`] = null;
+    updates[`ordersByStatus/${order.status}/${orderId}`] = true;
+
+    // reject => hoàn coin lại cho user
+    if (order.status === "rejected") {
+      const price = Number(order.price || 0);
+      if (price > 0) {
+        await db.ref(`users/${order.uid}/coins`).transaction((c) => Number(c || 0) + price);
+      }
+    }
+
+    await db.ref().update(updates);
+
+    return res.json({ ok: true, orderId, status: order.status });
+  } catch (err) {
+    console.error("ADMIN UPDATE ORDER ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+
 app.post("/get-user-list", authenticate, async (req, res) => {
   try {
     const myUid = req.user.uid;
