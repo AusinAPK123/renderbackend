@@ -339,22 +339,31 @@ app.post("/create-order", authenticate, async (req, res) => {
       return res.status(400).json({ ok: false, error: "Invalid price", uid });
     }
 
-    // Trừ coin atomic
-    const coinRef = db.ref(`users/${uid}/coins`);
-    const spend = await coinRef.transaction((current) => {
-      const coin = Number(current);
-      if (!Number.isFinite(coin)) return; // abort: dữ liệu coin lỗi
-      if (coin < p) return;               // abort: không đủ coin
-      return coin - p;
-    });
+    // Trừ coin atomic trên whole user object (ổn định hơn leaf coins)
+   const userRef = db.ref(`users/${uid}`);
+   const spend = await userRef.transaction((user) => {
+     if (!user || typeof user !== "object") return; // abort
+   
+     const coin = Number(user.coins ?? 0);
+     if (!Number.isFinite(coin)) return; // abort: coin lỗi
+     if (coin < p) return;               // abort: thiếu coin
+   
+     user.coins = coin - p;
+     return user;
+   });
+   
+   if (!spend.committed) {
+     const latestCoinSnap = await db.ref(`users/${uid}/coins`).get();
+     const latestCoin = Number(latestCoinSnap.val() ?? 0);
+     return res.status(400).json({
+       ok: false,
+       uid,
+       error: `Không đủ coin (${Number.isFinite(latestCoin) ? latestCoin : 0})`,
+     });
+   }
+   
+   const coinsLeft = Number(spend.snapshot?.val()?.coins ?? 0);
 
-    if (!spend.committed) {
-      const dbCoin = Number(spend.snapshot?.val());
-      if (!Number.isFinite(dbCoin)) {
-        return res.status(400).json({ ok: false, error: "Coin data invalid", uid });
-      }
-      return res.status(400).json({ ok: false, error: `Không đủ coin (${dbCoin})`, uid });
-    }
 
     // Tạo order + index
     const orderRef = db.ref("orders").push();
@@ -385,7 +394,7 @@ app.post("/create-order", authenticate, async (req, res) => {
       uid,
       orderId,
       order,
-      coinsLeft: Number(spend.snapshot?.val() || 0),
+      coinsLeft,
     });
   } catch (err) {
     console.error("CREATE_ORDER ERROR:", err);
