@@ -484,17 +484,24 @@ app.get("/game-state", authenticate, async (req, res) => {
   }
 });
 
+const ADMIN_KEY = process.env.ADMIN_KEY || "";
+const ADMIN_UIDS = (process.env.ADMIN_UIDS || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
 
-
-/* =====================================================
-   ADMIN AUTH (tạm thời bằng user token)
-===================================================== */
-async function authenticateAdmin(req, res, next) {
+async function authenticateAdminStrict(req, res, next) {
   try {
     const adminToken = req.headers["x-admin-token"];
-    if (!adminToken) return res.status(401).json({ ok: false, error: "Missing admin token" });
+    const adminKey = req.headers["x-admin-key"];
 
-    // Token này là userAuthToken đã có từ /login
+    if (!adminToken || !adminKey) {
+      return res.status(401).json({ ok: false, error: "Missing admin auth" });
+    }
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ ok: false, error: "Invalid admin key" });
+    }
+
     const tokenSnap = await db.ref(`userAuthTokens/${adminToken}`).get();
     if (!tokenSnap.exists()) return res.status(401).json({ ok: false, error: "Invalid admin token" });
 
@@ -505,78 +512,152 @@ async function authenticateAdmin(req, res, next) {
     const userSnap = await db.ref(`users/${adminUid}`).get();
     const userData = userSnap.val() || {};
 
-    // Check quyền admin (isAdmin bắt buộc)
-    if (!userData.isAdmin) {
-      return res.status(403).json({ ok: false, error: "Not admin" });
+    if (!userData.isAdmin) return res.status(403).json({ ok: false, error: "Not admin" });
+    if (ADMIN_UIDS.length && !ADMIN_UIDS.includes(adminUid)) {
+      return res.status(403).json({ ok: false, error: "Admin uid not allowed" });
     }
 
-    req.admin = { uid: adminUid, name: userData.name || "" };
+    req.admin = { uid: adminUid, name: userData.name || "Admin" };
     next();
-  } catch (err) {
-    console.error("ADMIN AUTH ERROR:", err);
+  } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 }
 
-/* =====================================================
-   ADMIN UPDATE ORDER (approve/reject)
-   body: { orderId, action, content }
-   action: "approve" | "reject"
-===================================================== */
-app.post("/admin/update-order", authenticateAdmin, async (req, res) => {
-  try {
-    const { orderId, action, content } = req.body || {};
+async function auditAdmin(action, target, payload, adminInfo) {
+  await db.ref("adminLogs").push({
+    action,
+    target,
+    payload: payload || {},
+    adminUid: adminInfo?.uid || "",
+    adminName: adminInfo?.name || "",
+    at: Date.now(),
+  });
+}
 
-    if (!orderId || !action) {
-      return res.status(400).json({ ok: false, error: "Missing fields" });
-    }
-    if (!["approve", "reject"].includes(action)) {
-      return res.status(400).json({ ok: false, error: "Invalid action" });
-    }
-    if (!content || !String(content).trim()) {
-      return res.status(400).json({ ok: false, error: "Content is required" });
-    }
-
-    const orderRef = db.ref(`orders/${orderId}`);
-    const tx = await orderRef.transaction((order) => {
-      if (!order) return; // abort
-      if (order.status !== "pending") return; // chỉ xử lý đơn pending
-
-      order.status = action === "approve" ? "approved" : "rejected";
-      order.content = String(content).trim();
-      order.updatedAt = Date.now();
-      order.reviewedBy = req.admin.uid;
-      order.reviewedByName = req.admin.name || "";
-      return order;
-    });
-
-    if (!tx.committed) {
-      return res.status(409).json({ ok: false, error: "Order already processed or not found" });
-    }
-
-    const order = tx.snapshot.val();
-    const updates = {};
-
-    // cập nhật index status
-    updates[`ordersByStatus/pending/${orderId}`] = null;
-    updates[`ordersByStatus/${order.status}/${orderId}`] = true;
-
-    // reject => hoàn coin lại cho user
-    if (order.status === "rejected") {
-      const price = Number(order.price || 0);
-      if (price > 0) {
-        await db.ref(`users/${order.uid}/coins`).transaction((c) => Number(c || 0) + price);
-      }
-    }
-
-    await db.ref().update(updates);
-
-    return res.json({ ok: true, orderId, status: order.status });
-  } catch (err) {
-    console.error("ADMIN UPDATE ORDER ERROR:", err);
-    return res.status(500).json({ ok: false, error: "Server error" });
-  }
+app.get("/admin/bootstrap", authenticateAdminStrict, async (req, res) => {
+  return res.json({ ok: true, admin: req.admin });
 });
+
+// USERS
+app.get("/admin/users", authenticateAdminStrict, async (req, res) => {
+  const snap = await db.ref("users").get();
+  const users = snap.val() || {};
+  const rows = Object.entries(users).map(([uid, u]) => ({
+    uid,
+    name: u?.name || "",
+    email: u?.email || "",
+    coins: Number(u?.coins || 0),
+    axp: Number(u?.axp || 0),
+  }));
+  res.json({ ok: true, users: rows });
+});
+
+app.patch("/admin/users/:uid", authenticateAdminStrict, async (req, res) => {
+  const uid = req.params.uid;
+  const patch = req.body || {};
+  const allowed = ["name", "coins", "axp"];
+  const updates = {};
+
+  for (const k of allowed) if (k in patch) updates[k] = patch[k];
+  if ("coins" in updates) updates.coins = Number(updates.coins || 0);
+  if ("axp" in updates) updates.axp = Number(updates.axp || 0);
+
+  await db.ref(`users/${uid}`).update(updates);
+  await auditAdmin("user.patch", uid, updates, req.admin);
+  res.json({ ok: true });
+});
+
+app.delete("/admin/users/:uid", authenticateAdminStrict, async (req, res) => {
+  const uid = req.params.uid;
+  await db.ref(`users/${uid}`).remove();
+  await auditAdmin("user.delete", uid, {}, req.admin);
+  res.json({ ok: true });
+});
+
+// ORDERS
+app.get("/admin/orders/pending", authenticateAdminStrict, async (req, res) => {
+  const idxSnap = await db.ref("ordersByStatus/pending").get();
+  const idx = idxSnap.val() || {};
+  const ids = Object.keys(idx);
+
+  const rows = [];
+  for (const id of ids) {
+    const s = await db.ref(`orders/${id}`).get();
+    if (s.exists()) rows.push({ id, ...s.val() });
+  }
+  rows.sort((a, b) => b.date - a.date);
+  res.json({ ok: true, orders: rows });
+});
+
+app.post("/admin/orders/:orderId/review", authenticateAdminStrict, async (req, res) => {
+  const orderId = req.params.orderId;
+  const { action, reason } = req.body || {};
+  if (!["approve", "reject"].includes(action)) return res.status(400).json({ ok: false, error: "Invalid action" });
+  if (!reason || !String(reason).trim()) return res.status(400).json({ ok: false, error: "Reason required" });
+
+  const orderRef = db.ref(`orders/${orderId}`);
+  const tx = await orderRef.transaction((o) => {
+    if (!o || o.status !== "pending") return;
+    o.status = action === "approve" ? "approved" : "rejected";
+    o.reviewReason = String(reason).trim();
+    o.reviewedBy = req.admin.uid;
+    o.reviewedAt = Date.now();
+    return o;
+  });
+  if (!tx.committed) return res.status(409).json({ ok: false, error: "Order not pending" });
+
+  const order = tx.snapshot.val();
+  const updates = {};
+  updates[`ordersByStatus/pending/${orderId}`] = null;
+  updates[`ordersByStatus/${order.status}/${orderId}`] = true;
+  await db.ref().update(updates);
+
+  if (order.status === "rejected") {
+    await db.ref(`users/${order.uid}/coins`).transaction(c => Number(c || 0) + Number(order.price || 0));
+  }
+
+  await auditAdmin("order.review", orderId, { action, reason }, req.admin);
+  res.json({ ok: true });
+});
+
+// NOTIFICATIONS
+app.get("/admin/notifications", authenticateAdminStrict, async (req, res) => {
+  const snap = await db.ref("notifications").get();
+  const data = snap.val() || {};
+  const list = Object.entries(data).map(([id, v]) => ({ id, ...v }))
+    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  res.json({ ok: true, notifications: list });
+});
+
+app.post("/admin/notifications", authenticateAdminStrict, async (req, res) => {
+  const { title = "", content = "" } = req.body || {};
+  if (!title.trim() || !content.trim()) return res.status(400).json({ ok: false, error: "Missing fields" });
+  const ref = db.ref("notifications").push();
+  await ref.set({ title: title.trim(), content: content.trim(), createdAt: Date.now() });
+  await auditAdmin("notif.create", ref.key, { title }, req.admin);
+  res.json({ ok: true, id: ref.key });
+});
+
+app.patch("/admin/notifications/:id", authenticateAdminStrict, async (req, res) => {
+  const id = req.params.id;
+  const { title, content } = req.body || {};
+  const updates = {};
+  if (title != null) updates.title = String(title).trim();
+  if (content != null) updates.content = String(content).trim();
+  updates.updatedAt = Date.now();
+  await db.ref(`notifications/${id}`).update(updates);
+  await auditAdmin("notif.update", id, updates, req.admin);
+  res.json({ ok: true });
+});
+
+app.delete("/admin/notifications/:id", authenticateAdminStrict, async (req, res) => {
+  const id = req.params.id;
+  await db.ref(`notifications/${id}`).remove();
+  await auditAdmin("notif.delete", id, {}, req.admin);
+  res.json({ ok: true });
+});
+
 
 
 app.post("/get-user-list", authenticate, async (req, res) => {
