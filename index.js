@@ -327,6 +327,27 @@ function getGameMeta(gameName) {
   return GAME_META[String(gameName || "").trim()];
 }
 
+function isModeAllowed(gameName, mode) {
+  const meta = getGameMeta(gameName);
+  if (!meta) return false;
+  const allowed = Object.keys(meta.entryFees || {});
+  // Cho phép mode có phí + mode casual mặc định
+  if (mode === "casual") return true;
+  return allowed.includes(mode);
+}
+
+function normalizeMode(gameName, rawMode) {
+  const meta = getGameMeta(gameName);
+  if (!meta) return null;
+
+  const mode = String(rawMode || meta.defaultMode || "").trim().toLowerCase();
+  if (!mode) return null;
+  if (!isModeAllowed(gameName, mode)) return null;
+
+  return mode;
+}
+
+
 function normalizeMode(gameName, rawMode) {
   const meta = getGameMeta(gameName);
   if (!meta) return null;
@@ -1012,12 +1033,15 @@ app.post("/submit-score", authenticate, async (req, res) => {
     const m = normalizeMode(gameName, mode);
     if (!m) return res.status(400).json({ ok: false, error: "Invalid mode" });
 
-    if (meta.requireJoinForScore) {
+    const fee = getEntryFee(gameName, m);
+    // Chỉ mode có phí/BXH mới bắt buộc phải register
+    if (meta.requireJoinForScore && fee > 0) {
       const memberSnap = await db.ref(`gameMembers/${gameName}/${m}/${uid}`).get();
       if (!memberSnap.exists()) {
         return res.status(403).json({ ok: false, error: "Chua dang ky mode BXH" });
       }
     }
+
 
     const newScore = Number(score);
     if (!Number.isFinite(newScore)) {
