@@ -330,11 +330,17 @@ function getGameMeta(gameName) {
 function isModeAllowed(gameName, mode) {
   const meta = getGameMeta(gameName);
   if (!meta) return false;
+
+  // Game không mode: chỉ cho defaultMode
+  if (!meta.modeRequired) {
+    return mode === String(meta.defaultMode || "").toLowerCase();
+  }
+
+  // Game có mode: chỉ cho mode nằm trong entryFees
   const allowed = Object.keys(meta.entryFees || {});
-  // Cho phép mode có phí + mode casual mặc định
-  if (mode === "casual") return true;
   return allowed.includes(mode);
 }
+
 
 function normalizeMode(gameName, rawMode) {
   const meta = getGameMeta(gameName);
@@ -348,16 +354,7 @@ function normalizeMode(gameName, rawMode) {
 }
 
 
-function normalizeMode(gameName, rawMode) {
-  const meta = getGameMeta(gameName);
-  if (!meta) return null;
 
-  const mode = String(rawMode || meta.defaultMode || "").trim().toLowerCase();
-  if (!mode) return null;
-
-  if (meta.modeRequired && !mode) return null;
-  return mode;
-}
 
 function getLeaderboardBasePath(gameName, mode) {
   const meta = getGameMeta(gameName);
@@ -386,33 +383,29 @@ app.post("/game-register", authenticate, async (req, res) => {
     if (!mode) return res.status(400).json({ ok: false, error: "Invalid mode" });
 
     const fee = getEntryFee(gameName, mode);
-    if (fee <= 0) {
-      return res.status(400).json({ ok: false, error: "Mode nay khong can dang ky" });
-    }
+    if (fee <= 0) return res.status(400).json({ ok: false, error: "Mode nay khong can dang ky" });
 
     const memberRef = db.ref(`gameMembers/${gameName}/${mode}/${uid}`);
     const memberSnap = await memberRef.get();
-    if (memberSnap.exists()) {
-      return res.json({ ok: true, joined: true, alreadyJoined: true, fee: 0 });
-    }
+    if (memberSnap.exists()) return res.json({ ok: true, joined: true, alreadyJoined: true, fee: 0 });
 
     const coinRef = db.ref(`users/${uid}/coins`);
     const spend = await coinRef.transaction((c) => {
       const coin = Number(c || 0);
-      if (!Number.isFinite(coin)) return;
-      if (coin < fee) return;
+      if (!Number.isFinite(coin)) return; // abort
+      if (coin < fee) return;             // abort
       return coin - fee;
     });
 
     if (!spend.committed) {
-      const latestCoin = Number((await coinRef.get()).val() || 0);
-      return res.status(400).json({ ok: false, error: `Khong du coin (${latestCoin})` });
+      const dbCoin = Number(spend.snapshot?.val());
+      if (!Number.isFinite(dbCoin)) {
+        return res.status(400).json({ ok: false, error: "Coin data invalid" });
+      }
+      return res.status(400).json({ ok: false, error: `Khong du coin (${dbCoin})` });
     }
 
-    await memberRef.set({
-      joinedAt: Date.now(),
-      feePaid: fee,
-    });
+    await memberRef.set({ joinedAt: Date.now(), feePaid: fee });
 
     return res.json({
       ok: true,
@@ -425,6 +418,7 @@ app.post("/game-register", authenticate, async (req, res) => {
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
+
 
 app.get("/game-state", authenticate, async (req, res) => {
   try {
@@ -1048,8 +1042,8 @@ app.post("/submit-score", authenticate, async (req, res) => {
       return res.status(400).json({ ok: false, error: "Score không hợp lệ" });
     }
 
-    const userSnap = await db.ref(`users/${uid}`).get();
-    const userName = userSnap.val()?.name || "Unknown";
+    const userSnap = await db.ref(`users/${uid}/name`).get();
+    const userName = userSnap.val() || "Unknown";
 
     const scorePath = `${getLeaderboardBasePath(gameName, m)}/${uid}`;
     const scoreRef = db.ref(scorePath);
