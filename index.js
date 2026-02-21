@@ -303,25 +303,49 @@ app.post("/checkin-claim", authenticate, async (req, res) => {
   }
 });
 
+async function resolveUidForScore(req) {
+  const sessionToken = req.headers["x-session-token"];
+  if (sessionToken) {
+    const snap = await db.ref(`userSessions/${sessionToken}`).get();
+    if (!snap.exists()) return null;
+    const s = snap.val() || {};
+    if (!s.expiresAt || Date.now() > s.expiresAt) return null;
+    return s.uid || null;
+  }
+
+  // fallback legacy web gửi uid trực tiếp
+  const uid = String(req.body?.uid || "").trim();
+  return uid || null;
+}
+
+
 /* =====================================================
    GAME CONFIG (generic)
 ===================================================== */
 const GAME_META = {
   BlockL: {
-    modeRequired: false,          // leaderboard/BlockL
-    defaultMode: "ranked",        // chỉ dùng cho membership/register
+    modeRequired: false,
+    defaultMode: "ranked",
     defaultOrder: "desc",
     requireJoinForScore: true,
-    entryFees: { ranked: 90 },    // casual = 0 (không đăng ký)
+    entryFees: { ranked: 90 },
   },
   minesweeper: {
-    modeRequired: true,           // leaderboard/minesweeper/{mode}
+    modeRequired: true,
     defaultMode: "easy",
-    defaultOrder: "asc",
+    defaultOrder: "asc", // thời gian thấp hơn rank cao hơn
     requireJoinForScore: true,
-    entryFees: { easy: 90, hard: 90 },
+    // mua theo từng mode riêng
+    entryFees: {
+      easy: 90,
+      medium: 90,
+      hard: 90,
+      no_flag: 90,
+      impossible: 90,
+    },
   },
 };
+
 
 function getGameMeta(gameName) {
   return GAME_META[String(gameName || "").trim()];
@@ -1172,9 +1196,9 @@ app.post("/use-token", async (req, res) => {
 /* =====================================================
    4. MULTI-GAME LEADERBOARD (with mode)
 ===================================================== */
-app.post("/submit-score", authenticate, async (req, res) => {
+app.post("/submit-score", async (req, res) => {
   try {
-    const uid = req.user.uid;
+    const uid = await resolveUidForScore(req);
     const { score, gameName, mode, order } = req.body || {};
 
     if (!uid || score == null || !gameName) {
@@ -1187,15 +1211,14 @@ app.post("/submit-score", authenticate, async (req, res) => {
     const m = normalizeMode(gameName, mode);
     if (!m) return res.status(400).json({ ok: false, error: "Invalid mode" });
 
+    // chỉ mode có phí mới bắt buộc đăng ký
     const fee = getEntryFee(gameName, m);
-    // Chỉ mode có phí/BXH mới bắt buộc phải register
     if (meta.requireJoinForScore && fee > 0) {
       const memberSnap = await db.ref(`gameMembers/${gameName}/${m}/${uid}`).get();
       if (!memberSnap.exists()) {
         return res.status(403).json({ ok: false, error: "Chua dang ky mode BXH" });
       }
     }
-
 
     const newScore = Number(score);
     if (!Number.isFinite(newScore)) {
