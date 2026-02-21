@@ -700,47 +700,54 @@ app.get("/admin/orders/pending", authenticateAdminStrict, async (req, res) => {
 
 
 app.post("/admin/orders/:orderId/review", authenticateAdminStrict, async (req, res) => {
-  const orderId = req.params.orderId;
-  const { action, reason } = req.body || {};
-  if (!["approve", "reject"].includes(action)) return res.status(400).json({ ok: false, error: "Invalid action" });
-  if (!reason || !String(reason).trim()) return res.status(400).json({ ok: false, error: "Reason required" });
+  try {
+    const orderId = req.params.orderId;
+    const { action, reason } = req.body || {};
 
-  const orderRef = db.ref(`orders/${orderId}`);
-  const tx = await orderRef.transaction((o) => {
-     if (!o) return;
-     const s = String(o.status || "").trim().toLowerCase();
-     if (s !== "pending") return;
-   
-     o.status = action === "approve" ? "approved" : "rejected";
-     o.reviewReason = String(reason).trim();
-     o.reviewedBy = req.admin.uid;
-     o.reviewedAt = Date.now();
-     return o;
-   });
-   
-   if (!tx.committed) {
-     const nowSnap = await orderRef.get();
-     return res.status(409).json({
-       ok: false,
-       error: "Order not pending",
-       currentStatus: nowSnap.val()?.status || null,
-     });
-   }
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({ ok: false, error: "Invalid action" });
+    }
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({ ok: false, error: "Reason required" });
+    }
 
+    const orderRef = db.ref(`orders/${orderId}`);
+    const snap = await orderRef.get();
+    if (!snap.exists()) return res.status(404).json({ ok: false, error: "Order not found" });
 
-  const order = tx.snapshot.val();
-  const updates = {};
-  updates[`ordersByStatus/pending/${orderId}`] = null;
-  updates[`ordersByStatus/${order.status}/${orderId}`] = true;
-  await db.ref().update(updates);
+    const order = snap.val() || {};
+    const status = String(order.status || "").trim().toLowerCase();
 
-  if (order.status === "rejected") {
-    await db.ref(`users/${order.uid}/coins`).transaction(c => Number(c || 0) + Number(order.price || 0));
+    // idempotent lock
+    if (order.reviewedAt) {
+      return res.status(409).json({ ok: false, error: "Order already reviewed", currentStatus: order.status || null });
+    }
+    if (status !== "pending") {
+      return res.status(409).json({ ok: false, error: "Order not pending", currentStatus: order.status || null });
+    }
+
+    const newStatus = action === "approve" ? "approved" : "rejected";
+
+    const updates = {};
+    updates[`orders/${orderId}/status`] = newStatus;
+    updates[`orders/${orderId}/reviewReason`] = String(reason).trim();
+    updates[`orders/${orderId}/reviewedBy`] = req.admin.uid;
+    updates[`orders/${orderId}/reviewedAt`] = Date.now();
+    updates[`ordersByStatus/pending/${orderId}`] = null;
+    updates[`ordersByStatus/${newStatus}/${orderId}`] = true;
+    await db.ref().update(updates);
+
+    if (newStatus === "rejected") {
+      await db.ref(`users/${order.uid}/coins`).transaction((c) => Number(c || 0) + Number(order.price || 0));
+    }
+
+    await auditAdmin("order.review", orderId, { action, reason }, req.admin);
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || "Review failed" });
   }
-
-  await auditAdmin("order.review", orderId, { action, reason }, req.admin);
-  res.json({ ok: true });
 });
+
 
 // NOTIFICATIONS
 app.get("/admin/notifications", authenticateAdminStrict, async (req, res) => {
