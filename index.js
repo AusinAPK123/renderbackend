@@ -707,14 +707,26 @@ app.post("/admin/orders/:orderId/review", authenticateAdminStrict, async (req, r
 
   const orderRef = db.ref(`orders/${orderId}`);
   const tx = await orderRef.transaction((o) => {
-    if (!o || o.status !== "pending") return;
-    o.status = action === "approve" ? "approved" : "rejected";
-    o.reviewReason = String(reason).trim();
-    o.reviewedBy = req.admin.uid;
-    o.reviewedAt = Date.now();
-    return o;
-  });
-  if (!tx.committed) return res.status(409).json({ ok: false, error: "Order not pending" });
+     if (!o) return;
+     const s = String(o.status || "").trim().toLowerCase();
+     if (s !== "pending") return;
+   
+     o.status = action === "approve" ? "approved" : "rejected";
+     o.reviewReason = String(reason).trim();
+     o.reviewedBy = req.admin.uid;
+     o.reviewedAt = Date.now();
+     return o;
+   });
+   
+   if (!tx.committed) {
+     const nowSnap = await orderRef.get();
+     return res.status(409).json({
+       ok: false,
+       error: "Order not pending",
+       currentStatus: nowSnap.val()?.status || null,
+     });
+   }
+
 
   const order = tx.snapshot.val();
   const updates = {};
