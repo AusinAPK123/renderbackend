@@ -495,10 +495,6 @@ async function authenticateAdminStrict(req, res, next) {
     const adminToken = req.headers["x-admin-token"];
     const adminKey = req.headers["x-admin-key"];
 
-    console.log("[ADMIN DEBUG] env:", JSON.stringify(ADMIN_KEY), "len:", ADMIN_KEY.length);
-    console.log("[ADMIN DEBUG] req:", JSON.stringify(adminKey || ""), "len:", (adminKey || "").length);
-    console.log("[ADMIN DEBUG] eq:", adminKey === ADMIN_KEY, "eqTrim:", String(adminKey || "").trim() === String(ADMIN_KEY).trim());
-
     if (!adminToken || !adminKey) {
       return res.status(401).json({ ok: false, error: "Missing admin auth" });
     }
@@ -557,6 +553,39 @@ app.get("/admin/users", authenticateAdminStrict, async (req, res) => {
   res.json({ ok: true, users: rows });
 });
 
+app.post("/admin/users", authenticateAdminStrict, async (req, res) => {
+  try {
+    const { name = "", email = "", password = "" } = req.body || {};
+    if (!name.trim() || !email.trim() || !password.trim()) {
+      return res.status(400).json({ ok: false, error: "Missing name/email/password" });
+    }
+    if (String(password).length < 6) {
+      return res.status(400).json({ ok: false, error: "Password too short" });
+    }
+
+    const userRecord = await admin.auth().createUser({
+      email: email.trim(),
+      password: String(password),
+      displayName: name.trim(),
+    });
+
+    await db.ref(`users/${userRecord.uid}`).set({
+      name: name.trim(),
+      email: email.trim(),
+      coins: 0,
+      axp: 0,
+      rulesAccepted: false,
+      createdAt: Date.now(),
+    });
+
+    await auditAdmin("user.create", userRecord.uid, { email: email.trim(), name: name.trim() }, req.admin);
+    return res.json({ ok: true, uid: userRecord.uid });
+  } catch (e) {
+    return res.status(400).json({ ok: false, error: e?.message || "Create user failed" });
+  }
+});
+
+
 app.patch("/admin/users/:uid", authenticateAdminStrict, async (req, res) => {
   const uid = req.params.uid;
   const patch = req.body || {};
@@ -586,13 +615,32 @@ app.get("/admin/orders/pending", authenticateAdminStrict, async (req, res) => {
   const ids = Object.keys(idx);
 
   const rows = [];
+  const fixes = {};
+
   for (const id of ids) {
     const s = await db.ref(`orders/${id}`).get();
-    if (s.exists()) rows.push({ id, ...s.val() });
+    if (!s.exists()) {
+      fixes[`ordersByStatus/pending/${id}`] = null;
+      continue;
+    }
+
+    const order = s.val() || {};
+    if (order.status !== "pending") {
+      fixes[`ordersByStatus/pending/${id}`] = null;
+      continue;
+    }
+
+    rows.push({ id, ...order });
   }
-  rows.sort((a, b) => b.date - a.date);
+
+  if (Object.keys(fixes).length) {
+    await db.ref().update(fixes); // tự sửa index lệch
+  }
+
+  rows.sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
   res.json({ ok: true, orders: rows });
 });
+
 
 app.post("/admin/orders/:orderId/review", authenticateAdminStrict, async (req, res) => {
   const orderId = req.params.orderId;
