@@ -577,34 +577,47 @@ app.get("/admin/users", authenticateAdminStrict, async (req, res) => {
   res.json({ ok: true, users: rows });
 });
 
+// CREATE USER (đồng bộ Auth + RTDB, có rollback)
 app.post("/admin/users", authenticateAdminStrict, async (req, res) => {
+  let createdUid = null;
   try {
     const { name = "", email = "", password = "" } = req.body || {};
-    if (!name.trim() || !email.trim() || !password.trim()) {
+    const n = String(name).trim();
+    const e = String(email).trim().toLowerCase();
+    const p = String(password);
+
+    if (!n || !e || !p) {
       return res.status(400).json({ ok: false, error: "Missing name/email/password" });
     }
-    if (String(password).length < 6) {
+    if (p.length < 6) {
       return res.status(400).json({ ok: false, error: "Password too short" });
     }
 
+    // 1) Create Auth user
     const userRecord = await admin.auth().createUser({
-      email: email.trim(),
-      password: String(password),
-      displayName: name.trim(),
+      email: e,
+      password: p,
+      displayName: n,
     });
+    createdUid = userRecord.uid;
 
-    await db.ref(`users/${userRecord.uid}`).set({
-      name: name.trim(),
-      email: email.trim(),
+    // 2) Create DB profile
+    await db.ref(`users/${createdUid}`).set({
+      name: n,
+      email: e,
       coins: 0,
       axp: 0,
       rulesAccepted: false,
       createdAt: Date.now(),
     });
 
-    await auditAdmin("user.create", userRecord.uid, { email: email.trim(), name: name.trim() }, req.admin);
-    return res.json({ ok: true, uid: userRecord.uid });
+    await auditAdmin("user.create", createdUid, { email: e, name: n }, req.admin);
+    return res.json({ ok: true, uid: createdUid });
   } catch (e) {
+    // rollback nếu Auth đã tạo nhưng DB fail
+    if (createdUid) {
+      try { await admin.auth().deleteUser(createdUid); } catch {}
+    }
     return res.status(400).json({ ok: false, error: e?.message || "Create user failed" });
   }
 });
@@ -625,11 +638,31 @@ app.patch("/admin/users/:uid", authenticateAdminStrict, async (req, res) => {
   res.json({ ok: true });
 });
 
+// DELETE USER (đồng bộ Auth + RTDB)
 app.delete("/admin/users/:uid", authenticateAdminStrict, async (req, res) => {
-  const uid = req.params.uid;
-  await db.ref(`users/${uid}`).remove();
-  await auditAdmin("user.delete", uid, {}, req.admin);
-  res.json({ ok: true });
+  const uid = String(req.params.uid || "").trim();
+  if (!uid) return res.status(400).json({ ok: false, error: "Missing uid" });
+
+  try {
+    // Xoá DB trước (idempotent), thêm path cleanup nếu bạn cần
+    const updates = {
+      [`users/${uid}`]: null,
+      [`ordersByUser/${uid}`]: null,
+      // token/sessions nếu có map theo uid thì xoá thêm ở đây
+    };
+    await db.ref().update(updates);
+
+    // Xoá Auth user
+    await admin.auth().deleteUser(uid);
+
+    await auditAdmin("user.delete", uid, {}, req.admin);
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({
+      ok: false,
+      error: e?.message || "Delete user failed",
+    });
+  }
 });
 
 // ORDERS
