@@ -320,10 +320,17 @@ async function resolveUidForScore(req) {
 
 
 /* =====================================================
-   GAME CONFIG (generic)
+    CONFIG (generic)
 ===================================================== */
-const GAME_META = {
+const _META = {
   BlockL: {
+    modeRequired: false,
+    defaultMode: "ranked",
+    defaultOrder: "desc",
+    requireJoinForScore: true,
+    entryFees: { ranked: 90 },
+  },
+  Tetris: {
     modeRequired: false,
     defaultMode: "ranked",
     defaultOrder: "desc",
@@ -347,32 +354,32 @@ const GAME_META = {
 };
 
 
-function getGameMeta(gameName) {
-  return GAME_META[String(gameName || "").trim()];
+function getMeta(Name) {
+  return _META[String(Name || "").trim()];
 }
 
-function isModeAllowed(gameName, mode) {
-  const meta = getGameMeta(gameName);
+function isModeAllowed(Name, mode) {
+  const meta = getMeta(Name);
   if (!meta) return false;
 
-  // Game không mode: chỉ cho defaultMode
+  //  không mode: chỉ cho defaultMode
   if (!meta.modeRequired) {
     return mode === String(meta.defaultMode || "").toLowerCase();
   }
 
-  // Game có mode: chỉ cho mode nằm trong entryFees
+  //  có mode: chỉ cho mode nằm trong entryFees
   const allowed = Object.keys(meta.entryFees || {});
   return allowed.includes(mode);
 }
 
 
-function normalizeMode(gameName, rawMode) {
-  const meta = getGameMeta(gameName);
+function normalizeMode(Name, rawMode) {
+  const meta = getMeta(Name);
   if (!meta) return null;
 
   const mode = String(rawMode || meta.defaultMode || "").trim().toLowerCase();
   if (!mode) return null;
-  if (!isModeAllowed(gameName, mode)) return null;
+  if (!isModeAllowed(Name, mode)) return null;
 
   return mode;
 }
@@ -380,38 +387,38 @@ function normalizeMode(gameName, rawMode) {
 
 
 
-function getLeaderboardBasePath(gameName, mode) {
-  const meta = getGameMeta(gameName);
+function getLeaderboardBasePath(Name, mode) {
+  const meta = getMeta(Name);
   if (!meta) return null;
-  if (meta.modeRequired) return `leaderboard/${gameName}/${mode}`;
-  return `leaderboard/${gameName}`;
+  if (meta.modeRequired) return `leaderboard/${Name}/${mode}`;
+  return `leaderboard/${Name}`;
 }
 
-function getEntryFee(gameName, mode) {
-  const meta = getGameMeta(gameName);
+function getEntryFee(Name, mode) {
+  const meta = getMeta(Name);
   if (!meta) return 0;
   return Number(meta.entryFees?.[mode] || 0);
 }
 
 /* =====================================================
-   GAME REGISTER / GAME STATE
+    REGISTER /  STATE
 ===================================================== */
-app.post("/game-register", authenticate, async (req, res) => {
+app.post("/-register", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
-    const gameName = String(req.body?.gameName || "").trim();
-    const meta = getGameMeta(gameName);
-    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported game" });
+    const Name = String(req.body?.Name || "").trim();
+    const meta = getMeta(Name);
+    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported " });
 
-    const mode = normalizeMode(gameName, req.body?.mode);
+    const mode = normalizeMode(Name, req.body?.mode);
     if (!mode) return res.status(400).json({ ok: false, error: "Invalid mode" });
 
-    const fee = getEntryFee(gameName, mode);
+    const fee = getEntryFee(Name, mode);
     if (fee <= 0) {
       return res.status(400).json({ ok: false, error: "Mode nay khong can dang ky", uid });
     }
 
-    const memberRef = db.ref(`gameMembers/${gameName}/${mode}/${uid}`);
+    const memberRef = db.ref(`Members/${Name}/${mode}/${uid}`);
     const memberSnap = await memberRef.get();
     if (memberSnap.exists()) {
       return res.json({ ok: true, joined: true, alreadyJoined: true, fee: 0, uid });
@@ -464,27 +471,27 @@ app.post("/game-register", authenticate, async (req, res) => {
       coinsLeft: Number(spend.snapshot?.val() ?? 0),
     });
   } catch (err) {
-    console.error("GAME_REGISTER ERROR:", err);
+    console.error("_REGISTER ERROR:", err);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
 
-app.get("/game-state", authenticate, async (req, res) => {
+app.get("/-state", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
-    const gameName = String(req.query?.gameName || "").trim();
-    const meta = getGameMeta(gameName);
-    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported game" });
+    const Name = String(req.query?.Name || "").trim();
+    const meta = getMeta(Name);
+    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported " });
 
-    const mode = normalizeMode(gameName, req.query?.mode);
+    const mode = normalizeMode(Name, req.query?.mode);
     if (!mode) return res.status(400).json({ ok: false, error: "Invalid mode" });
 
-    const memberSnap = await db.ref(`gameMembers/${gameName}/${mode}/${uid}`).get();
+    const memberSnap = await db.ref(`Members/${Name}/${mode}/${uid}`).get();
     const joined = memberSnap.exists();
     const joinedAt = joined ? Number(memberSnap.val()?.joinedAt || 0) : 0;
 
-    const lbBase = getLeaderboardBasePath(gameName, mode);
+    const lbBase = getLeaderboardBasePath(Name, mode);
     const lbSnap = await db.ref(lbBase).get();
     const raw = lbSnap.val() || {};
 
@@ -501,9 +508,9 @@ app.get("/game-state", authenticate, async (req, res) => {
       })
       .slice(0, 100);
 
-    return res.json({ ok: true, gameName, mode, joined, joinedAt, rows });
+    return res.json({ ok: true, Name, mode, joined, joinedAt, rows });
   } catch (err) {
-    console.error("GAME_STATE ERROR:", err);
+    console.error("_STATE ERROR:", err);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
@@ -1246,27 +1253,27 @@ app.post("/use-token", async (req, res) => {
 });
 
 /* =====================================================
-   4. MULTI-GAME LEADERBOARD (with mode)
+   4. MULTI- LEADERBOARD (with mode)
 ===================================================== */
 app.post("/submit-score", async (req, res) => {
   try {
     const uid = await resolveUidForScore(req);
-    const { score, gameName, mode, order } = req.body || {};
+    const { score, Name, mode, order } = req.body || {};
 
-    if (!uid || score == null || !gameName) {
+    if (!uid || score == null || !Name) {
       return res.status(400).json({ ok: false, error: "Thiếu dữ liệu" });
     }
 
-    const meta = getGameMeta(gameName);
-    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported game" });
+    const meta = getMeta(Name);
+    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported " });
 
-    const m = normalizeMode(gameName, mode);
+    const m = normalizeMode(Name, mode);
     if (!m) return res.status(400).json({ ok: false, error: "Invalid mode" });
 
     // chỉ mode có phí mới bắt buộc đăng ký
-    const fee = getEntryFee(gameName, m);
+    const fee = getEntryFee(Name, m);
     if (meta.requireJoinForScore && fee > 0) {
-      const memberSnap = await db.ref(`gameMembers/${gameName}/${m}/${uid}`).get();
+      const memberSnap = await db.ref(`Members/${Name}/${m}/${uid}`).get();
       if (!memberSnap.exists()) {
         return res.status(403).json({ ok: false, error: "Chua dang ky mode BXH" });
       }
@@ -1280,7 +1287,7 @@ app.post("/submit-score", async (req, res) => {
     const userSnap = await db.ref(`users/${uid}/name`).get();
     const userName = userSnap.val() || "Unknown";
 
-    const scorePath = `${getLeaderboardBasePath(gameName, m)}/${uid}`;
+    const scorePath = `${getLeaderboardBasePath(Name, m)}/${uid}`;
     const scoreRef = db.ref(scorePath);
     const snap = await scoreRef.get();
 
