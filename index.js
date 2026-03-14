@@ -93,10 +93,6 @@ app.post("/login", async (req, res) => {
     const snap = await userRef.get();
     const userData = snap.val() || {};
 
-    if (userData.coins < 0) {
-      return res.status(403).json({ ok: false, error: "Tài khoản bị phong ấn!" });
-    }
-
     // user token dài hạn
     const userToken = genToken(32);
     await db.ref(`userAuthTokens/${userToken}`).set({
@@ -794,28 +790,44 @@ app.delete("/admin/notifications/:id", authenticateAdminStrict, async (req, res)
 });
 
 
-
 app.post("/get-user-list", authenticate, async (req, res) => {
   try {
     const myUid = req.user.uid;
+
     const snap = await db.ref("users").get();
     const users = snap.val() || {};
 
     const list = Object.entries(users)
       .filter(([uid]) => uid !== myUid)
-      .map(([uid, u]) => ({
-        uid,
-        name: u?.name || "Unknown",
-        level: Number(u?.level ?? u?.lv ?? 0),
-      }))
-      .sort((a, b) => b.level - a.level);
+      .map(([uid, u]) => {
+        const level = Number(u?.level ?? u?.lv ?? 0);
+
+        const user = {
+          uid,
+          name: u?.name || "Unknown",
+          level
+        };
+
+        if (u?.isAdmin === true) {
+          user.isAdmin = true;
+        }
+
+        return user;
+      })
+      .sort((a, b) => {
+        const adminDiff = (b.isAdmin === true) - (a.isAdmin === true);
+        if (adminDiff !== 0) return adminDiff;
+        return b.level - a.level;
+      });
 
     return res.json({ ok: true, users: list });
+
   } catch (err) {
     console.error("GET_USER_LIST ERROR:", err);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
+
 
 
 app.post("/upmessage", authenticate, msgrateLimit, async (req, res) => {
