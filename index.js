@@ -472,7 +472,7 @@ app.post("/game-register", authenticate, async (req, res) => {
 });
 
 
-app.get("/game-state", async (req, res) => {
+app.get("/game-state", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
     const Name = String(req.query?.gameName || "").trim();
