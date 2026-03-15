@@ -354,7 +354,6 @@ function getMeta(Name) {
   return _META[String(Name || "").trim()];
 }
 
-  const meta = getMeta(Name);
 function isModeAllowed(Name, mode) {
   if (!meta) return false;
 
