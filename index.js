@@ -472,7 +472,7 @@ app.post("/game-register", authenticate, async (req, res) => {
 });
 
 
-app.get("/game-state", authenticate, async (req, res) => {
+app.get("/game-state", async (req, res) => {
   try {
     const uid = req.user.uid;
     const Name = String(req.query?.gameName || "").trim();
@@ -489,7 +489,9 @@ app.get("/game-state", authenticate, async (req, res) => {
     const lbBase = getLeaderboardBasePath(Name, mode);
     const lbSnap = await db.ref(lbBase).get();
     const raw = lbSnap.val() || {};
-
+console.log("lbBase =", lbBase);
+console.log("lbSnap exists =", lbSnap.exists());
+console.log("raw =", raw);
     const rows = Object.entries(raw)
       .map(([playerUid, v]) => ({
         uid: playerUid,
