@@ -355,6 +355,7 @@ function getMeta(Name) {
 }
 
 function isModeAllowed(Name, mode) {
+  const meta = getMeta(Name);
   if (!meta) return false;
 
   //  không mode: chỉ cho defaultMode
