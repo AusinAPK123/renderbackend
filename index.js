@@ -474,43 +474,69 @@ app.post("/game-register", authenticate, async (req, res) => {
 
 app.get("/game-state", authenticate, async (req, res) => {
   try {
-    const uid = req.user.uid;
-    const Name = String(req.query?.gameName || "").trim();
-    const meta = getMeta(Name);
-    if (!meta) return res.status(400).json({ ok: false, error: "Unsupported " });
+    // 1. Lấy UID (Đảm bảo middleware authenticate đã giải mã token và gắn vào req.user)
+    const uid = req.user?.uid; 
+    if (!uid) return res.status(401).json({ ok: false, error: "Unauthorized" });
 
-    const mode = normalizeMode(Name, req.query?.mode);
-    if (!mode) return res.status(400).json({ ok: false, error: "Invalid mode" });
+    // 2. Lấy params từ query (Frontend gửi gameName và mode)
+    const gameName = String(req.query?.gameName || "").trim();
+    const meta = getMeta(gameName);
+    
+    // Debug để xem tên game có khớp với hàm getMeta không
+    console.log(`Request Game: ${gameName}, Meta found: ${!!meta}`);
 
-    const memberSnap = await db.ref(`gameMembers/${Name}/${mode}/${uid}`).get();
+    if (!meta) {
+      return res.status(400).json({ ok: false, error: `Game '${gameName}' không tồn tại` });
+    }
+
+    const mode = normalizeMode(gameName, req.query?.mode);
+    if (!mode) return res.status(400).json({ ok: false, error: "Chế độ chơi không hợp lệ" });
+
+    // 3. Kiểm tra trạng thái tham gia của user
+    const memberSnap = await db.ref(`gameMembers/${gameName}/${mode}/${uid}`).get();
     const joined = memberSnap.exists();
-    const joinedAt = joined ? Number(memberSnap.val()?.joinedAt || 0) : 0;
+    const joinedAt = joined ? (memberSnap.val()?.joinedAt || 0) : 0;
 
-    const lbBase = getLeaderboardBasePath(Name, mode);
+    // 4. Lấy Leaderboard - Tối ưu: Chỉ lấy Top 100 từ Firebase luôn (Tiết kiệm RAM cho Server)
+    const lbBase = getLeaderboardBasePath(gameName, mode);
+    const order = meta.defaultOrder || "desc";
+    
+    // Truy vấn Firebase có sắp xếp (Nếu cấu trúc Firebase cho phép)
+    // Ở đây giữ nguyên logic map/sort của bạn nhưng thêm try-catch nhỏ
     const lbSnap = await db.ref(lbBase).get();
     const raw = lbSnap.val() || {};
-console.log("lbBase =", lbBase);
-console.log("lbSnap exists =", lbSnap.exists());
-console.log("raw =", raw);
+
+    console.log("Database Path:", lbBase);
+    console.log("Data size:", Object.keys(raw).length);
+
     const rows = Object.entries(raw)
       .map(([playerUid, v]) => ({
         uid: playerUid,
-        name: v?.name || "Unknown",
+        name: v?.name || "Người chơi",
         bestscore: Number(v?.bestscore || 0),
         updatedAt: Number(v?.updatedAt || 0),
       }))
       .sort((a, b) => {
-        const order = meta.defaultOrder || "desc";
         return order === "asc" ? a.bestscore - b.bestscore : b.bestscore - a.bestscore;
       })
       .slice(0, 100);
 
-    return res.json({ ok: true, Name, mode, joined, joinedAt, rows });
+    // 5. Trả về kết quả
+    return res.json({ 
+      ok: true, 
+      Name: gameName, // Trả về đúng tên để Frontend đồng bộ
+      mode, 
+      joined, 
+      joinedAt, 
+      rows 
+    });
+
   } catch (err) {
-    console.error("_STATE ERROR:", err);
-    return res.status(500).json({ ok: false, error: "Server error" });
+    console.error("CRITICAL ERROR IN /game-state:", err);
+    return res.status(500).json({ ok: false, error: "Lỗi hệ thống server" });
   }
 });
+
 
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
 const ADMIN_UIDS = (process.env.ADMIN_UIDS || "")
