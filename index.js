@@ -402,7 +402,7 @@ function getEntryFee(Name, mode) {
 app.post("/-register", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
-    const Name = String(req.body?.Name || "").trim();
+    const Name = String(req.body?.gameName || req.query?.gameName || "").trim();
     const meta = getMeta(Name);
     if (!meta) return res.status(400).json({ ok: false, error: "Unsupported " });
 
@@ -476,7 +476,7 @@ app.post("/-register", authenticate, async (req, res) => {
 app.get("/-state", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
-    const Name = String(req.query?.Name || "").trim();
+    const Name = String(req.body?.gameName || req.query?.gameName || "").trim();
     const meta = getMeta(Name);
     if (!meta) return res.status(400).json({ ok: false, error: "Unsupported " });
 
