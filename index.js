@@ -398,7 +398,7 @@ function getEntryFee(Name, mode) {
 /* =====================================================
     REGISTER /  STATE
 ===================================================== */
-app.post("/-register", authenticate, async (req, res) => {
+app.post("/game-register", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
     const Name = String(req.body?.gameName || req.query?.gameName || "").trim();
@@ -413,7 +413,7 @@ app.post("/-register", authenticate, async (req, res) => {
       return res.status(400).json({ ok: false, error: "Mode nay khong can dang ky", uid });
     }
 
-    const memberRef = db.ref(`Members/${Name}/${mode}/${uid}`);
+    const memberRef = db.ref(`gameMembers/${Name}/${mode}/${uid}`);
     const memberSnap = await memberRef.get();
     if (memberSnap.exists()) {
       return res.json({ ok: true, joined: true, alreadyJoined: true, fee: 0, uid });
