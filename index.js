@@ -472,7 +472,7 @@ app.post("/-register", authenticate, async (req, res) => {
 });
 
 
-app.get("/-state", authenticate, async (req, res) => {
+app.get("/game-state", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
     const Name = String(req.query?.gameName || "").trim();
@@ -482,7 +482,7 @@ app.get("/-state", authenticate, async (req, res) => {
     const mode = normalizeMode(Name, req.query?.mode);
     if (!mode) return res.status(400).json({ ok: false, error: "Invalid mode" });
 
-    const memberSnap = await db.ref(`Members/${Name}/${mode}/${uid}`).get();
+    const memberSnap = await db.ref(`gameMembers/${Name}/${mode}/${uid}`).get();
     const joined = memberSnap.exists();
     const joinedAt = joined ? Number(memberSnap.val()?.joinedAt || 0) : 0;
 
