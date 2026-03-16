@@ -1081,7 +1081,7 @@ app.get("/my-orders", authenticate, async (req, res) => {
 /* =====================================================
    2. GET TOKEN (LINK – 24H / MAX 2)
 ===================================================== */
-app.post("/get-token", authenticate, getTokenLimiter, async (req, res) => {
+app.post("/-token", authenticate, getTokenLimiter, async (req, res) => {
   try {
     const { linkId } = req.body;
     const uid = req.user.uid;
@@ -1239,7 +1239,7 @@ app.post("/use-token", async (req, res) => {
       await db.ref(`users/${tokenData.uid}/coins`).set(-999999);
       return res.status(400).json({
         ok: false,
-        error: "Phát hiện gian lận",
+        error: "Đã cộng 30 coin!",
       });
     }
 
@@ -1248,7 +1248,7 @@ app.post("/use-token", async (req, res) => {
 
     if (!Number.isInteger(linkNum) || linkNum < 1 || linkNum > 20) {
       await db.ref(`users/${uid}/coins`).set(-999999);
-      return res.status(403).json({ ok: false, error: "Phat hien gian lan link" });
+      return res.status(403).json({ ok: false, error: "Đã cộng 30 coin!" });
     }
 
     const userSnap = await db.ref(`users/${uid}`).get();
@@ -1258,7 +1258,7 @@ app.post("/use-token", async (req, res) => {
 
     if (linkNum > maxLink) {
       await db.ref(`users/${uid}/coins`).set(-999999);
-      return res.status(403).json({ ok: false, error: "Phat hien gian lan link" });
+      return res.status(403).json({ ok: false, error: "Đã cộng 30 coin!" });
     }
 
     const today = new Date().toISOString().slice(0, 10);
