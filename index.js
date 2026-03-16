@@ -1492,7 +1492,7 @@ const publicGetTokenLimiter = rateLimit({
 
 // ====== CẤU HÌNH ======
 const FIXED_UID = "fqjgGY4Lv2PkO6JruwH83SBpN8j1";
-const COOLDOWN_TIME = 30 * 60 * 1000; // 30 phút tính bằng ms
+const public_COOLDOWN_TIME = 30 * 60 * 1000; // 30 phút tính bằng ms
 
 app.post("/public-get-token", publicGetTokenLimiter, async (req, res) => {
   try {
@@ -1532,8 +1532,8 @@ app.post("/public-get-token", publicGetTokenLimiter, async (req, res) => {
     }
 
     // ---- 2. Kiểm tra Cooldown 30 phút ----
-    if (data.lastUsedAt && (now - data.lastUsedAt < COOLDOWN_TIME)) {
-      const remainingMs = COOLDOWN_TIME - (now - data.lastUsedAt);
+    if (data.lastUsedAt && (now - data.lastUsedAt < public_COOLDOWN_TIME)) {
+      const remainingMs = public_COOLDOWN_TIME - (now - data.lastUsedAt);
       const minutesLeft = Math.ceil(remainingMs / 60000);
       return res.status(429).json({
         ok: false,
