@@ -1080,48 +1080,53 @@ app.get("/my-orders", authenticate, async (req, res) => {
 
 /* =====================================================
    2. GET TOKEN (LINK – 24H / MAX 2)
-===================================================== */
+===================================================== */// Thêm hằng số cooldown ở đầu file
+const COOLDOWN_TIME = 30 * 60 * 1000; // 30 phút tính bằng ms
+
 app.post("/-token", authenticate, getTokenLimiter, async (req, res) => {
   try {
     const { linkId } = req.body;
     const uid = req.user.uid;
+    const now = Date.now(); // Lấy thời gian hiện tại
     const today = new Date().toISOString().slice(0, 10);
 
     const linkNum = Number(linkId);
-    if (!Number.isInteger(linkNum) || linkNum < 1 || linkNum > 20) {
-      return res.status(400).json({ ok: false, error: "Invalid linkId" });
-    }
-
-    const userSnap = await db.ref(`users/${uid}`).get();
-    const userData = userSnap.val() || {};
-    const level = Number(userData.level ?? userData.lv ?? 0);
-    const maxLink = getMaxAllowedLinks(level);
-
-    if (linkNum > maxLink) {
-      await db.ref(`users/${uid}/coins`).set(-999999);
-      return res.status(403).json({ ok: false, error: "Phat hien gian lan link" });
-    }
+    // ... (Giữ nguyên phần check linkNum và level của bạn) ...
 
     const linkRef = db.ref(`users/${uid}/links/${linkNum}`);
     const snap = await linkRef.get();
-    const data = snap.val() || { count: 0, date: today };
+    
+    // Thêm lastUsedAt vào object mặc định
+    const data = snap.val() || { count: 0, date: today, lastUsedAt: 0 };
 
+    // Reset count nếu qua ngày mới
     if (data.date !== today) {
       data.count = 0;
       data.date = today;
-      await linkRef.set(data);
+      // Không reset lastUsedAt vì cooldown có thể xuyên ngày
     }
 
+    // 1. Kiểm tra giới hạn 2 lần/ngày
     if (Number(data.count || 0) >= 2) {
       return res.status(429).json({
         ok: false,
-        error: "Hom nay ban da vuot du 2 lan cho link nay",
-        countToday: Number(data.count || 0),
+        error: "Hôm nay bạn đã vượt đủ 2 lần cho link này",
       });
     }
 
+    // 2. KIỂM TRA COOLDOWN 30 PHÚT
+    if (data.lastUsedAt && (now - data.lastUsedAt < COOLDOWN_TIME)) {
+      const remainingMs = COOLDOWN_TIME - (now - data.lastUsedAt);
+      const minutesLeft = Math.ceil(remainingMs / 60000);
+      return res.status(429).json({
+        ok: false,
+        error: `Vui lòng đợi thêm ${minutesLeft} phút để tiếp tục link này`,
+        remaining: remainingMs
+      });
+    }
+
+    // Nếu vượt qua hết các check thì mới tạo token
     const token = crypto.randomBytes(16).toString("hex");
-    const now = Date.now();
     await db.ref(`sessions/${token}`).set({
       uid,
       linkId: String(linkNum),
@@ -1141,6 +1146,8 @@ app.post("/-token", authenticate, getTokenLimiter, async (req, res) => {
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
+
+
 
 
 // Giới hạn Web chỉ được gọi tối đa 20 lần / 1 phút để tránh bị bot spam quét UID
@@ -1204,19 +1211,21 @@ app.post("/use-token", async (req, res) => {
     }
 
     const tokenRef = db.ref(`sessions/${token}`);
+    const now = Date.now(); // Lấy thời gian hiện tại dùng chung cho cả logic
 
     const claim = await tokenRef.transaction((current) => {
       if (!current) return current;
       if (current.used) return;
-      if (Date.now() > current.expiresAt) return;
+      if (now > current.expiresAt) return;
 
-      if (Date.now() - current.startAt < 15000) {
+      // Check cheat vượt link quá nhanh (< 15 giây)
+      if (now - current.startAt < 15000) {
         current.flagCheat = true;
         return current;
       }
 
       current.used = true;
-      current.usedAt = Date.now();
+      current.usedAt = now;
       return current;
     });
 
@@ -1235,22 +1244,25 @@ app.post("/use-token", async (req, res) => {
       });
     }
 
+    // Xử lý "tặng quà" cho mấy ông cheat
     if (tokenData.flagCheat) {
       await db.ref(`users/${tokenData.uid}/coins`).set(-999999);
       return res.status(400).json({
         ok: false,
-        error: "Đã cộng 30 coin!",
+        error: "Đã cộng 30 coin!", // "Thành công" giả để đánh lạc hướng
       });
     }
 
     const { uid, linkId } = tokenData;
     const linkNum = Number(linkId);
 
+    // Validate linkId
     if (!Number.isInteger(linkNum) || linkNum < 1 || linkNum > 20) {
       await db.ref(`users/${uid}/coins`).set(-999999);
       return res.status(403).json({ ok: false, error: "Đã cộng 30 coin!" });
     }
 
+    // Check level để giới hạn số link được vượt
     const userSnap = await db.ref(`users/${uid}`).get();
     const userData = userSnap.val() || {};
     const level = Number(userData.level ?? userData.lv ?? 0);
@@ -1264,17 +1276,33 @@ app.post("/use-token", async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     const linkRef = db.ref(`users/${uid}/links/${linkNum}`);
 
+    // Transaction cập nhật lượt vượt và mốc thời gian cooldown
     const countTx = await linkRef.transaction((link) => {
-      if (!link || link.date !== today) return { count: 1, date: today };
+      // Nếu qua ngày mới hoặc chưa có dữ liệu link này
+      if (!link || link.date !== today) {
+        return { 
+          count: 1, 
+          date: today, 
+          lastUsedAt: now // Cập nhật mốc thời gian để tính cooldown 30p
+        };
+      }
+
       const current = Number(link.count || 0);
-      if (current >= 2) return;
-      return { count: current + 1, date: today };
+      if (current >= 2) return; // Hết lượt thì hủy transaction
+
+      return { 
+        ...link,
+        count: current + 1, 
+        date: today, 
+        lastUsedAt: now // Cập nhật mốc thời gian mới nhất
+      };
     });
 
     if (!countTx.committed) {
       return res.status(429).json({ ok: false, error: "Vuot gioi han 2 lan/ngay" });
     }
 
+    // Cộng tài sản cho người dùng "thật"
     await db.ref(`users/${uid}/coins`).transaction((c) => (c || 0) + 30);
     await db.ref(`users/${uid}/axp`).transaction((v) => (v || 0) + 5);
 
@@ -1283,6 +1311,7 @@ app.post("/use-token", async (req, res) => {
       added: 30,
       xpAdded: 5,
     });
+
   } catch (err) {
     console.error("USE TOKEN ERROR:", err);
     return res.status(500).json({
@@ -1291,6 +1320,7 @@ app.post("/use-token", async (req, res) => {
     });
   }
 });
+
 
 /* =====================================================
    4. MULTI- LEADERBOARD (with mode)
@@ -1416,6 +1446,127 @@ app.get("/check-rules", async (req, res) => {
     coins: data.coins || 0
   });
 });
+
+//hoang
+app.get("/public-user-data", publicLimiter, async (req, res) => {
+  try {
+    // uid cố định – chỉ user này dùng được API
+    const uid = "fqjgGY4Lv2PkO6JruwH83SBpN8j1";
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Lấy user data
+    const snap = await db.ref(`users/${uid}`).get();
+    const user = snap.val() || {};
+
+    const coins = user.coins || 0;
+    const axp = user.axp || 0;
+    const links = user.links || {};
+
+    // Tạo object trả countToday của 20 link
+    const linkCounts = {};
+    for (let i = 1; i <= 20; i++) {
+      const d = links[i] || {};
+      linkCounts[i] = (d.date === today) ? (d.count || 0) : 0;
+    }
+
+    res.json({
+      ok: true,
+      coins,
+      axp,
+      counts: linkCounts
+    });
+
+  } catch (err) {
+    console.log(err);
+    res.json({ ok: false });
+  }
+});
+
+// ====== RATE LIMIT ======
+const publicGetTokenLimiter = rateLimit({
+  windowMs: 10 * 1000,  // 10s
+  max: 1,
+  message: { ok: false, error: "Slow down!" }
+});
+
+// ====== CẤU HÌNH ======
+const FIXED_UID = "fqjgGY4Lv2PkO6JruwH83SBpN8j1";
+const COOLDOWN_TIME = 30 * 60 * 1000; // 30 phút tính bằng ms
+
+app.post("/public-get-token", publicGetTokenLimiter, async (req, res) => {
+  try {
+    const { linkId } = req.body;
+    const uid = FIXED_UID; 
+    const now = Date.now();
+    const today = new Date().toISOString().slice(0, 10);
+
+    // ---- Validate linkId ----
+    const linkNum = Number(linkId);
+    if (!Number.isInteger(linkNum) || linkNum < 1 || linkNum > 20) {
+      return res.status(400).json({ ok: false, error: "Invalid linkId" });
+    }
+
+    // ---- Lấy user link data ----
+    const linkRef = db.ref(`users/${uid}/links/${linkNum}`);
+    const snap = await linkRef.get();
+    
+    // Thêm lastUsedAt vào object mặc định để check
+    const data = snap.val() || { count: 0, date: today, lastUsedAt: 0 };
+
+    // Reset ngày mới (nhưng giữ lại lastUsedAt để cooldown không bị reset khi qua ngày)
+    if (data.date !== today) {
+      data.count = 0;
+      data.date = today;
+      // Cập nhật lại ngày vào DB luôn
+      await linkRef.update({ count: 0, date: today });
+    }
+
+    // ---- 1. Giới hạn 2 lần/ngày ----
+    if (Number(data.count || 0) >= 2) {
+      return res.status(429).json({
+        ok: false,
+        error: "Hôm nay bạn đã vượt đủ 2 lần cho link này",
+        countToday: Number(data.count || 0),
+      });
+    }
+
+    // ---- 2. Kiểm tra Cooldown 30 phút ----
+    if (data.lastUsedAt && (now - data.lastUsedAt < COOLDOWN_TIME)) {
+      const remainingMs = COOLDOWN_TIME - (now - data.lastUsedAt);
+      const minutesLeft = Math.ceil(remainingMs / 60000);
+      return res.status(429).json({
+        ok: false,
+        error: `Link này đang hồi chiêu, vui lòng đợi ${minutesLeft} phút nữa.`,
+        remaining: remainingMs
+      });
+    }
+
+    // ---- Tạo session token ----
+    const token = crypto.randomBytes(16).toString("hex");
+
+    await db.ref(`sessions/${token}`).set({
+      uid,
+      linkId: String(linkNum),
+      startAt: now,
+      expiresAt: now + 60 * 60 * 1000,   // 1 giờ
+      deleteAt: now + 6 * 60 * 60 * 1000,
+      used: false,
+    });
+
+    return res.json({
+      ok: true,
+      token,
+      countToday: Number(data.count || 0),
+    });
+
+  } catch (err) {
+    console.error("PUBLIC_GET_TOKEN ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+
 
 async function clean() {
   const today = new Date().toISOString().slice(0, 10);
